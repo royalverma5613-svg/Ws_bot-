@@ -6,7 +6,6 @@ const {
     useMultiFileAuthState, 
     fetchLatestBaileysVersion, 
     DisconnectReason,
-    Browsers,
     makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
@@ -220,7 +219,7 @@ bot.command('addvip', async (ctx) => {
     } else ctx.reply('❌ User not found.');
 });
 
-// 6. WHATSAPP ENGINE: BULLETPROOF PAIRING
+// 6. WHATSAPP ENGINE: STABLE PAIRING
 async function startWhatsAppPairing(userId, phone, ctx) {
     userState[userId] = 'PROCESSING';
     userPhoneNumbers[userId] = phone;
@@ -255,7 +254,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                     keys: makeCacheableSignalKeyStore(state.keys, logger)
                 },
                 logger,
-                browser: Browsers.macOS('Desktop'),
+                browser: ['Ubuntu', 'Chrome', '20.0.0.0'],
                 syncFullHistory: false,
                 markOnlineOnConnect: true,
                 connectTimeoutMs: 60000,
@@ -273,7 +272,6 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
                     console.log(`[WA Socket Closed] User: ${userId}, Status: ${statusCode}`);
 
-                    // 515 is restartRequired (WhatsApp accepts pairing code and triggers restart)
                     if (statusCode === 515 && userState[userId] === 'PROCESSING') {
                         console.log('Handshake in progress (515)... Reconnecting socket immediately');
                         initSocket();
@@ -296,7 +294,6 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                 }
             });
 
-            // Request pairing code safely after socket establishes connection
             if (!sock.authState.creds.registered && !codeSent) {
                 setTimeout(async () => {
                     try {
@@ -317,7 +314,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             );
                         }
                     } catch (e) {
-                        ctx.reply(`❌ Could not generate pairing code: ${e.message}\n\n⚠️ <i>WhatsApp might have temporarily rate-limited pairing requests for this number. Wait 5 minutes and tap below to retry.</i>`, {
+                        ctx.reply(`❌ Could not generate pairing code: ${e.message}\n\nTap below to retry.`, {
                             parse_mode: 'HTML',
                             ...Markup.inlineKeyboard([
                                 [Markup.button.callback('🔄 Try Again', 'request_new_code')],
@@ -325,7 +322,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             ])
                         });
                     }
-                }, 4000);
+                }, 3500);
             }
 
         } catch (e) {
@@ -365,4 +362,3 @@ bot.on('text', async (ctx) => {
 });
 
 bot.launch().then(() => console.log('Bot Launched Successfully'));
-            
