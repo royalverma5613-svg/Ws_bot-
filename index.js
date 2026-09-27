@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -72,35 +72,21 @@ const User = mongoose.model('User', UserSchema);
 const activeSockets = {};
 
 // ==========================================
-// 3. MULTI-LANGUAGE & HELP MENU
+// 3. REPLY KEYBOARD & MENUS
 // ==========================================
 const langData = {
     en: { 
-        menu: "🏠 **Main Menu**\nSelect an option:", 
-        btn_login: "📱 Login Account", btn_status: "📊 Status", btn_create: "➕ Create Group", btn_remove: "🗑️ Remove Members", btn_edit: "✏️ Edit Group", btn_settings: "⚙️ Settings", btn_lang: "🌐 Change Lang", btn_vip: "💎 Buy VIP", btn_help: "❓ Help",
-        help_text: "📖 **How to use this Bot:**\n\n1. Click on **Login Account**.\n2. Send your WhatsApp number with country code (e.g., 919876XXXXX).\n3. You will receive an 8-digit Pairing Code within 30 seconds.\n4. Enter this code in your linked WhatsApp devices.\n5. Once connected, use **Create Group** to automate your tasks!\n\n⚠️ *VIP is required for unlimited usage.*"
-    },
-    id: { 
-        menu: "🏠 **Menu Utama**\nPilih opsi:", 
-        btn_login: "📱 Masuk Akun", btn_status: "📊 Status", btn_create: "➕ Buat Grup", btn_remove: "🗑️ Hapus Anggota", btn_edit: "✏️ Edit Grup", btn_settings: "⚙️ Pengaturan", btn_lang: "🌐 Ganti Bahasa", btn_vip: "💎 Beli VIP", btn_help: "❓ Bantuan",
-        help_text: "📖 **Cara menggunakan Bot ini:**\n\n1. Klik **Masuk Akun**.\n2. Kirim nomor WhatsApp Anda (contoh: 628123XXXXX).\n3. Dapatkan Kode Pemasangan 8 digit dalam 30 detik.\n4. Masukkan kode di WhatsApp Anda.\n5. Gunakan **Buat Grup** untuk otomatisasi!\n\n⚠️ *Akses VIP diperlukan untuk tanpa batas.*"
-    },
-    zh: { 
-        menu: "🏠 **主菜单**\n选择一个选项：", 
-        btn_login: "📱 登录账号", btn_status: "📊 状态", btn_create: "➕ 创建群组", btn_remove: "🗑️ 删除成员", btn_edit: "✏️ 编辑群组", btn_settings: "⚙️ 设置", btn_lang: "🌐 更改语言", btn_vip: "💎 购买 VIP", btn_help: "❓ 帮助",
-        help_text: "📖 **如何使用此机器人:**\n\n1. 点击 **登录账号**。\n2. 发送带国家代码的WhatsApp号码。\n3. 30秒内获取8位配对码。\n4. 在您的WhatsApp中输入此代码。\n5. 使用 **创建群组** 自动执行任务！\n\n⚠️ *无限制使用需要VIP。*"
+        help_text: "📖 **How to use this Bot:**\n\n1. Click on **Login Account**.\n2. Send your WhatsApp number with country code (e.g., 919876XXXXX).\n3. You will receive an 8-digit Pairing Code.\n4. Enter this code in your linked WhatsApp devices.\n5. Once connected, use **Create Group** to automate your tasks!\n\n⚠️ *VIP is required for unlimited usage.*"
     }
 };
 
-function getMainMenu(lang) {
-    const t = langData[lang] || langData['en'];
-    return Markup.inlineKeyboard([
-        [Markup.button.callback(t.btn_login, 'menu_login'), Markup.button.callback(t.btn_status, 'menu_status')],
-        [Markup.button.callback(t.btn_create, 'menu_create'), Markup.button.callback(t.btn_remove, 'menu_remove')],
-        [Markup.button.callback(t.btn_edit, 'menu_edit'), Markup.button.callback(t.btn_settings, 'menu_settings')],
-        [Markup.button.callback(t.btn_vip, 'buy_vip'), Markup.button.callback(t.btn_help, 'menu_help')],
-        [Markup.button.callback(t.btn_lang, 'change_lang')]
-    ]);
+function getReplyKeyboard() {
+    return Markup.keyboard([
+        ['📱 Login Account', '📊 Status'],
+        ['➕ Create Group', '🗑️ Remove Members'],
+        ['✏️ Edit Group', '⚙️ Settings'],
+        ['💎 Buy VIP', '❓ Help']
+    ]).resize();
 }
 
 // ==========================================
@@ -114,7 +100,7 @@ async function sendLog(message) {
 
 setInterval(() => {
     const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-    sendLog(`⚙️ <b>SYSTEM HEARTBEAT</b>\n\n⏱ Time: ${time} (IST)\n✅ All group maker services, MongoDB, and WhatsApp Engines are running smoothly.`);
+    sendLog(`⚙️ <b>SYSTEM HEARTBEAT</b>\n\n⏱ Time: ${time} (IST)\n✅ All services and WhatsApp engines are running smoothly.`);
 }, 5 * 60 * 60 * 1000);
 
 function getFormattedTime() {
@@ -127,7 +113,7 @@ function formatUserForLog(fromObj) {
 }
 
 // ==========================================
-// 5. BOT CORE LOGIC & BUSY LOCK WITH STOP BUTTON
+// 5. BOT CORE LOGIC & BUSY LOCK
 // ==========================================
 const userState = {};
 const spamTracker = {};
@@ -137,7 +123,7 @@ bot.use(async (ctx, next) => {
         const id = ctx.from.id;
         
         if (userState[id] === 'PROCESSING') {
-            const warningMsg = '⏳ Service is currently running! Please wait or click the Stop button below[span_4](start_span)[span_4](end_span).';
+            const warningMsg = '⏳ Service is currently running! Please wait or click the Stop button below[span_1](start_span)[span_1](end_span).';
             if (ctx.callbackQuery) {
                 await ctx.answerCbQuery(warningMsg, { show_alert: true }).catch(()=>{});
             } else if (ctx.message) {
@@ -155,7 +141,7 @@ bot.use(async (ctx, next) => {
         
         if (spamTracker[id].length > 5) {
             if (spamTracker[id].length === 6) { 
-                sendLog(`⚠️ <b>SPAM ALERT!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n⏱ Time: ${getFormattedTime()}\n🚨 Action: Flooding the bot.`);
+                sendLog(`⚠️ <b>SPAM ALERT!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n⏱ Time: ${getFormattedTime()}`);
             }
             return; 
         }
@@ -170,7 +156,7 @@ bot.action('stop_process', async (ctx) => {
         delete activeSockets[userId];
     }
     userState[userId] = null;
-    ctx.editMessageText("🛑 **Service Stopped Successfully.**\nYou can start a new action from the main menu.", { parse_mode: 'Markdown' });
+    ctx.editMessageText("🛑 **Service Stopped Successfully.**\nYou can start a new action from the menu.", { parse_mode: 'Markdown' });
     showMainMenu(ctx);
 });
 
@@ -211,41 +197,39 @@ async function showMainMenu(ctx) {
                 vip_expiry: Math.floor(Date.now() / 1000) + (24 * 60 * 60) 
             });
             await user.save();
-            
-            sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n⏱ Time: ${getFormattedTime()}\n🎁 Status: 1 Day Free Trial Activated.`);
-            
-            return ctx.reply("🎉 Welcome! Select language:", Markup.inlineKeyboard([
-                [Markup.button.callback('🇬🇧 English', 'lang_en'), Markup.button.callback('🇮🇩 Indo', 'lang_id'), Markup.button.callback('🇨🇳 中文', 'lang_zh')]
-            ]));
+            sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}`);
         }
-        const userLang = user.language || 'en';
-        ctx.reply(langData[userLang].menu, getMainMenu(userLang));
+        ctx.reply("🏠 **Main Menu**\nSelect an option:", getReplyKeyboard());
     } catch (e) { console.log(e); }
 }
 
-bot.action(/lang_(.+)/, async (ctx) => {
-    const lang = ctx.match[1];
-    await User.findOneAndUpdate({ user_id: ctx.from.id }, { language: lang });
-    ctx.editMessageText("✅ Language saved.\n\n" + langData[lang].menu, getMainMenu(lang));
+// REPLY KEYBOARD TEXT HANDLERS
+bot.hears('📱 Login Account', async (ctx) => {
+    userState[ctx.from.id] = 'WAITING_NUMBER';
+    ctx.reply("📱 Send your WhatsApp number with country code (e.g., 919876XXXXX):", Markup.inlineKeyboard([
+        [Markup.button.callback('🛑 Cancel', 'stop_process')]
+    ]));
 });
 
-bot.action('menu_help', async (ctx) => {
-    const user = await User.findOne({ user_id: ctx.from.id });
-    const lang = user ? user.language : 'en';
-    ctx.reply(langData[lang].help_text, { parse_mode: 'Markdown' });
-    ctx.answerCbQuery();
-});
-
-// STATUS / CREATE GROUP VALIDATION (If no WhatsApp linked)
-bot.action(['menu_status', 'menu_create', 'menu_edit', 'menu_remove'], async (ctx) => {
+bot.hears('📊 Status', async (ctx) => {
     const user = await User.findOne({ user_id: ctx.from.id });
     if (!user || !user.is_connected) {
-        await ctx.answerCbQuery("⚠️ Please link your WhatsApp number first!", { show_alert: true });
         return ctx.reply("⚠️ **Action Required:** You haven't linked your WhatsApp account yet. Please click **Login Account** first.", { parse_mode: 'Markdown' });
     }
-    ctx.answerCbQuery();
     ctx.reply("📊 Your WhatsApp account is active and connected!");
 });
+
+bot.hears(['➕ Create Group', '🗑️ Remove Members', '✏️ Edit Group'], async (ctx) => {
+    const user = await User.findOne({ user_id: ctx.from.id });
+    if (!user || !user.is_connected) {
+        return ctx.reply("⚠️ **Action Required:** Please link your WhatsApp account first using **Login Account**.", { parse_mode: 'Markdown' });
+    }
+    ctx.reply("🚀 Service is ready for execution.");
+});
+
+bot.hears('⚙️ Settings', (ctx) => ctx.reply("⚙️ Settings panel options."));
+bot.hears('💎 Buy VIP', (ctx) => ctx.reply("💎 Contact admin @egofiremax to buy VIP access."));
+bot.hears('❓ Help', (ctx) => ctx.reply(langData['en'].help_text, { parse_mode: 'Markdown' }));
 
 // ==========================================
 // 6. ADD VIP COMMAND (/addvip)
@@ -254,25 +238,18 @@ bot.command('addvip', async (ctx) => {
     if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) {
         return ctx.reply("🚫 Only Owner can use this command.");
     }
-    
     const parts = ctx.message.text.split(' ');
     if (parts.length !== 3) {
         return ctx.reply("⚠️ Format: `/addvip <user_id> <days>`", { parse_mode: 'Markdown' });
     }
-    
     const targetId = parseInt(parts[1]);
     const days = parseInt(parts[2]);
     const expiryTime = Math.floor(Date.now() / 1000) + (days * 24 * 60 * 60);
     
-    const user = await User.findOneAndUpdate(
-        { user_id: targetId },
-        { is_vip: 1, vip_expiry: expiryTime },
-        { new: true }
-    );
-    
+    const user = await User.findOneAndUpdate({ user_id: targetId }, { is_vip: 1, vip_expiry: expiryTime }, { new: true });
     if (user) {
         ctx.reply(`✅ Successfully added VIP to ${targetId} for ${days} days.`);
-        sendLog(`💎 <b>VIP ACTIVATED (By Admin)</b>\n\n👤 Target ID: <code>${targetId}</code>\n⏱ Activated At: ${getFormattedTime()}\n⏳ Duration: ${days} Days`);
+        sendLog(`💎 <b>VIP ACTIVATED (By Admin)</b>\n\n👤 Target ID: <code>${targetId}</code>\n⏳ Duration: ${days} Days`);
         bot.telegram.sendMessage(targetId, `🎉 Congratulations! Your VIP access has been activated for ${days} days!`).catch(()=>{});
     } else {
         ctx.reply("❌ User not found in database.");
@@ -280,16 +257,8 @@ bot.command('addvip', async (ctx) => {
 });
 
 // ==========================================
-// 7. WHATSAPP ENGINE (30-SEC TIMEOUT & STOP BUTTON)
+// 7. WHATSAPP ENGINE (AUTO-RETRY & STABLE SOCKET)
 // ==========================================
-bot.action('menu_login', (ctx) => {
-    userState[ctx.from.id] = 'WAITING_NUMBER';
-    ctx.reply("📱 Send your WhatsApp number with country code (e.g., 919876XXXXX):", Markup.inlineKeyboard([
-        [Markup.button.callback('🛑 Cancel', 'stop_process')]
-    ]));
-    ctx.answerCbQuery();
-});
-
 function deleteFolderRecursive(directoryPath) {
     if (fs.existsSync(directoryPath)) {
         fs.readdirSync(directoryPath).forEach((file) => {
@@ -309,6 +278,7 @@ bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
 
     if (text.startsWith('/')) return;
+    if (['📱 Login Account', '📊 Status', '➕ Create Group', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings', '💎 Buy VIP', '❓ Help'].includes(text)) return;
 
     if (userState[userId] === 'WAITING_NUMBER') {
         const phoneRegex = /^\+?[0-9]{10,15}$/;
@@ -322,68 +292,97 @@ bot.on('text', async (ctx) => {
         const sessionPath = `./auth_info_${userId}`;
         deleteFolderRecursive(sessionPath);
         
-        await ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(Please wait up to 30 seconds)*`, Markup.inlineKeyboard([
+        await ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...`, Markup.inlineKeyboard([
             [Markup.button.callback('🛑 Stop Service', 'stop_process')]
         ]));
-        
+
+        let attempts = 0;
+        let success = false;
+
+        async function runAutoRetryLogin() {
+            while (attempts < 3 && !success) {
+                attempts++;
+                if (attempts > 1) {
+                    await ctx.reply(`⚠️ Previous Code Expired or Failed!\n\n🔄 Automatically requesting a fresh pairing code (Attempt ${attempts}/3)...`);
+                    deleteFolderRecursive(sessionPath);
+                }
+
+                try {
+                    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+                    const { version } = await fetchLatestBaileysVersion();
+                    
+                    const waSock = makeWASocket({
+                        version,
+                        printQRInTerminal: false,
+                        auth: state,
+                        logger: pino({ level: "silent" }),
+                        browser: ["Ubuntu", "Chrome", "22.04.4"],
+                        syncFullHistory: false,
+                        markOnlineOnConnect: true,
+                        connectTimeoutMs: 60000,
+                        defaultQueryTimeoutMs: 60000,
+                        keepAliveIntervalMs: 10000
+                    });
+                    
+                    activeSockets[userId] = waSock;
+                    waSock.ev.on("creds.update", saveCreds);
+
+                    let codeRequested = false;
+
+                    const connected = await new Promise((resolve, reject) => {
+                        waSock.ev.on("connection.update", (update) => {
+                            const { connection } = update;
+                            if (connection === 'open') {
+                                resolve(true);
+                            }
+                        });
+
+                        setTimeout(async () => {
+                            try {
+                                if (!codeRequested && !success) {
+                                    codeRequested = true;
+                                    let code = await waSock.requestPairingCode(phoneNumber);
+                                    code = code?.match(/.{1,4}/g)?.join("-") || code;
+                                    
+                                    await ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp._`, Markup.inlineKeyboard([
+                                        [Markup.button.callback('🛑 Stop Service', 'stop_process')]
+                                    ]));
+                                }
+                            } catch (e) {
+                                reject(e);
+                            }
+                        }, 3000);
+
+                        // 40 seconds timeout for manual code entry per attempt
+                        setTimeout(() => {
+                            if (!success) {
+                                reject(new Error("Timeout/Code Expired"));
+                            }
+                        }, 40000);
+                    });
+
+                    if (connected) {
+                        success = true;
+                    }
+                } catch (err) {
+                    if (attempts >= 3) {
+                        throw new Error("Max retry attempts reached. Connection failed.");
+                    }
+                }
+            }
+        }
+
         try {
-            const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-            const { version } = await fetchLatestBaileysVersion();
-            
-            const waSock = makeWASocket({
-                version,
-                printQRInTerminal: false,
-                auth: state,
-                logger: pino({ level: "silent" }),
-                browser: ["Mac OS", "Chrome", "10.0.0"]
-            });
-            
-            activeSockets[userId] = waSock;
-            waSock.ev.on("creds.update", saveCreds);
-            
-            let codeSent = false;
-
-            const connectionPromise = new Promise((resolve, reject) => {
-                waSock.ev.on("connection.update", async (update) => {
-                    const { connection } = update;
-                    if (connection === 'open') {
-                        resolve(true);
-                    }
-                });
-
-                setTimeout(async () => {
-                    try {
-                        if (!codeSent) {
-                            codeSent = true;
-                            let code = await waSock.requestPairingCode(phoneNumber);
-                            code = code?.match(/.{1,4}/g)?.join("-") || code;
-                            
-                            await ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp within 30 seconds._`, Markup.inlineKeyboard([
-                                [Markup.button.callback('🛑 Stop Service', 'stop_process')]
-                            ]));
-                        }
-                    } catch (e) {
-                        reject(e);
-                    }
-                }, 3000);
-
-                setTimeout(() => {
-                    reject(new Error("Timeout/Code Expired"));
-                }, 30000);
-            });
-
-            await connectionPromise;
+            await runAutoRetryLogin();
 
             if (activeSockets[userId]) {
                 delete activeSockets[userId];
             }
             userState[userId] = null;
 
-            sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESSFUL</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n✅ Status: Linked Successfully!`);
-            
+            sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESSFUL</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}`);
             await ctx.reply(`✅ **WhatsApp Account Linked Successfully!**`, { parse_mode: 'Markdown' });
             await User.updateOne({ user_id: userId }, { $set: { is_connected: true },$addToSet: { phone_numbers: phoneNumber } });
-            
             showMainMenu(ctx);
 
         } catch (error) {
@@ -393,8 +392,8 @@ bot.on('text', async (ctx) => {
             }
             userState[userId] = null;
             
-            sendLog(`❌ <b>WHATSAPP LOGIN FAILED</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n⚠️ Error: ${error.message}`);
-            await ctx.reply(`❌ **Login Failed / Timeout:** ${error.message}\nPlease try again from the main menu.`, { parse_mode: 'Markdown' });
+            sendLog(`❌ <b>WHATSAPP LOGIN FAILED</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}`);
+            await ctx.reply(`❌ **Login Failed / Cancelled.** Please try again from the menu.`, { parse_mode: 'Markdown' });
             showMainMenu(ctx);
         }
     }
