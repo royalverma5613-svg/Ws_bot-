@@ -677,9 +677,9 @@ bot.action('edperm_confirm', async (ctx) => {
 });
 
 // 11. TEXT INPUT HANDLER
-bot.on('text', async (ctx) => {
+bot.on('text', async (ctx, next) => {
     const text = ctx.message.text.trim(), id = ctx.from.id;
-    if (text.startsWith('/')) return;
+    if (text.startsWith('/')) return next();
     if (['📊 Status', '➕ Create Group', '📋 Copy GC Links', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings', '📱 Login Account', '💎 Buy VIP', '❓ Help'].includes(text)) return;
 
     if (userState[id] === 'WAITING_NUMBER') {
