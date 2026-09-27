@@ -19,6 +19,8 @@ const FORCE_SUB_CHAT = '@ai2kmm';
 const FORCE_SUB_LINK = 'https://t.me/ai2kmm';
 const bot = new Telegraf(TG_BOT_TOKEN);
 
+const BOT_FOOTER = "\n\n👑 <b>Bot Owner:</b> @egofiremax\n🤖 <b>Bot Username:</b> @Ws_gc_2xbot";
+
 if (process.env.MONGODB_URI) {
     mongoose.connect(process.env.MONGODB_URI).catch(e => console.log('DB:', e.message));
 }
@@ -29,7 +31,8 @@ const User = mongoose.model('User', new mongoose.Schema({
     phone_numbers: [String], main_number: String, is_connected: { type: Boolean, default: false }
 }));
 
-const activeSockets = {}, userPhoneNumbers = {}, userState = {}, groupWizard = {}, removeSelection = {}, editGroupSelection = {}, spamTracker = {};
+const activeSockets = {}, userPhoneNumbers = {}, userState = {}, groupWizard = {};
+const removeSelection = {}, editGroupSelection = {}, copyLinkSelection = {}, spamTracker = {};
 const getFormattedTime = () => new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
 async function sendLog(msg) {
@@ -41,14 +44,16 @@ setInterval(() => {
 
 const getInlineMenu = () => Markup.inlineKeyboard([
     [Markup.button.callback('📊 Status', 'menu_status'), Markup.button.callback('➕ Create Group', 'menu_create')],
-    [Markup.button.callback('🗑️ Remove Members', 'menu_remove'), Markup.button.callback('✏️ Edit Group', 'menu_edit'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
+    [Markup.button.callback('📋 Copy GC Links', 'menu_copy_links'), Markup.button.callback('🗑️ Remove Members', 'menu_remove')],
+    [Markup.button.callback('✏️ Edit Group', 'menu_edit'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
     [Markup.button.callback('📱 Login Account', 'menu_login'), Markup.button.callback('💎 Buy VIP', 'buy_vip')],
     [Markup.button.callback('❓ Help', 'menu_help'), Markup.button.callback('🌐 Language', 'change_lang')]
 ]);
 
 const getReplyKeyboard = () => Markup.keyboard([
     ['📊 Status', '➕ Create Group'],
-    ['🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings'],
+    ['📋 Copy GC Links', '🗑️ Remove Members'],
+    ['✏️ Edit Group', '⚙️ Settings'],
     ['📱 Login Account', '💎 Buy VIP', '❓ Help']
 ]).resize();
 
@@ -111,9 +116,10 @@ bot.action('stop_process', async (ctx) => {
     if (activeSockets[id]) { try { activeSockets[id].end(undefined); } catch {} delete activeSockets[id]; }
     const phone = userPhoneNumbers[id];
     if (phone) cleanFolder(`./auth_info_${id}_${phone}`);
-    userState[id] = null; delete userPhoneNumbers[id]; delete groupWizard[id]; delete removeSelection[id]; delete editGroupSelection[id];
+    userState[id] = null; delete userPhoneNumbers[id]; delete groupWizard[id];
+    delete removeSelection[id]; delete editGroupSelection[id]; delete copyLinkSelection[id];
     await ctx.answerCbQuery('Stopped').catch(()=>{});
-    await ctx.reply('🛑 <b>Service Stopped Successfully.</b>', { parse_mode: 'HTML' });
+    await ctx.reply('🛑 <b>Service Stopped Successfully.</b>' + BOT_FOOTER, { parse_mode: 'HTML' });
     showHome(ctx);
 });
 
@@ -133,21 +139,21 @@ bot.action(/set_lang_(.+)/, async (ctx) => {
     ctx.editMessageText('✅ <b>Language set successfully!</b>\n\n🏠 <b>Main Menu</b>\nSelect an option:', { parse_mode: 'HTML', ...getInlineMenu() });
 });
 
-bot.action('buy_vip', (ctx) => { ctx.answerCbQuery(); ctx.reply('💎 <b>VIP Plans:</b>\n\nContact Admin @egofiremax to activate VIP.', { parse_mode: 'HTML' }); });
+bot.action('buy_vip', (ctx) => { ctx.answerCbQuery(); ctx.reply('💎 <b>VIP Plans:</b>\n\nContact Admin @egofiremax to activate VIP.' + BOT_FOOTER, { parse_mode: 'HTML' }); });
 bot.action('menu_help', (ctx) => {
     ctx.answerCbQuery();
-    ctx.reply('📖 <b>How to Use:</b>\n\n1. <b>Login:</b> Pair WhatsApp via 8-digit code.\n2. <b>Status:</b> Manage accounts (Main/Logout).\n3. <b>Create Group:</b> Batch group creator.\n4. <b>Remove Members:</b> Kick non-admins from selected groups.', { parse_mode: 'HTML' });
+    ctx.reply('📖 <b>How to Use:</b>\n\n1. <b>Login:</b> Pair WhatsApp via 8-digit code.\n2. <b>Status:</b> Manage accounts.\n3. <b>Create Group:</b> Batch group creator.\n4. <b>Copy GC Links:</b> Extract invite links of existing groups.\n5. <b>Remove Members:</b> Kick non-admins from selected groups.' + BOT_FOOTER, { parse_mode: 'HTML' });
 });
-bot.hears('💎 Buy VIP', (ctx) => ctx.reply('💎 Contact @egofiremax for VIP access.'));
-bot.hears('❓ Help', (ctx) => ctx.reply('📖 Use <b>Login Account</b> to pair and <b>Create Group</b> to batch create groups.'));
-bot.hears('⚙️ Settings', (ctx) => ctx.reply('⚙️ Use <b>Language</b> or <b>Status</b> menu to configure settings.'));
+bot.hears('💎 Buy VIP', (ctx) => ctx.reply('💎 Contact @egofiremax for VIP access.' + BOT_FOOTER, { parse_mode: 'HTML' }));
+bot.hears('❓ Help', (ctx) => ctx.reply('📖 Use <b>Login Account</b> to pair, <b>Create Group</b> to create, and <b>Copy GC Links</b> to extract links.' + BOT_FOOTER, { parse_mode: 'HTML' }));
+bot.hears('⚙️ Settings', (ctx) => ctx.reply('⚙️ Use <b>Language</b> or <b>Status</b> menu to configure settings.' + BOT_FOOTER, { parse_mode: 'HTML' }));
 
-// 3. STATUS PANEL (ACCOUNT MANAGEMENT)
+// 3. STATUS PANEL
 async function showUserStatus(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
     const u = await User.findOne({ user_id: ctx.from.id });
     if (!u || !u.phone_numbers || u.phone_numbers.length === 0) {
-        return ctx.reply("⚠️ <b>Action Required:</b> No WhatsApp account linked yet. Please click <b>Login Account</b> first.", { parse_mode: 'HTML' });
+        return ctx.reply("⚠️ <b>Action Required:</b> No WhatsApp account linked yet. Please click <b>Login Account</b> first." + BOT_FOOTER, { parse_mode: 'HTML' });
     }
     const mainNum = u.main_number || u.phone_numbers[0];
     let accountsText = '📱 <b>Active Accounts:</b>\n';
@@ -164,7 +170,7 @@ async function showUserStatus(ctx) {
 
     const isVip = u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
     const expiryDate = u.vip_expiry ? new Date(u.vip_expiry * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Expired';
-    ctx.reply(`${accountsText}\n💎 <b>VIP:</b> ${isVip ? '✅ Active' : '❌ Inactive'}\n⏳ <b>Validity:</b> ${expiryDate}\n⚡ <b>Engine:</b> 🟢 Ready`, { parse_mode: 'HTML', ...Markup.inlineKeyboard(inlineButtons) });
+    ctx.reply(`${accountsText}\n💎 <b>VIP:</b> ${isVip ? '✅ Active' : '❌ Inactive'}\n⏳ <b>Validity:</b> ${expiryDate}\n⚡ <b>Engine:</b> 🟢 Ready` + BOT_FOOTER, { parse_mode: 'HTML', ...Markup.inlineKeyboard(inlineButtons) });
 }
 bot.action('menu_status', showUserStatus);
 bot.hears('📊 Status', showUserStatus);
@@ -184,11 +190,11 @@ bot.action(/logout_acc_(.+)/, async (ctx) => {
     const newMain = (u.main_number === target) ? (updated[0] || null) : u.main_number;
     await User.findOneAndUpdate({ user_id: id }, { phone_numbers: updated, main_number: newMain, is_connected: updated.length > 0 });
     await ctx.answerCbQuery(`+${target} logged out.`);
-    ctx.reply(`✅ <b>Account +${target} logged out.</b>`, { parse_mode: 'HTML' });
+    ctx.reply(`✅ <b>Account +${target} logged out.</b>` + BOT_FOOTER, { parse_mode: 'HTML' });
     showUserStatus(ctx);
 });
 
-// 4. LOGIN & PAIRING ENGINE (ALL COUNTRIES SUPPORTED)
+// 4. LOGIN & PAIRING
 function promptLogin(ctx) {
     userState[ctx.from.id] = 'WAITING_NUMBER';
     ctx.reply("Send your WhatsApp number with country code.\nExample: 919876543210", Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]]));
@@ -225,13 +231,13 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                     const code = lastDisconnect?.error?.output?.statusCode;
                     if (code === 515 && userState[userId] === 'PROCESSING') initSocket();
                     else if (code === DisconnectReason.loggedOut) {
-                        cleanFolder(sessionDir); userState[userId] = null; ctx.reply('❌ Device logged out. Please link again.');
+                        cleanFolder(sessionDir); userState[userId] = null; ctx.reply('❌ Device logged out. Please link again.' + BOT_FOOTER, { parse_mode: 'HTML' });
                     }
                 }
                 if (connection === 'open') {
                     userState[userId] = null; delete userPhoneNumbers[userId];
                     sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESS</b>\n\n👤 User: @${ctx.from.username || 'None'} (<code>${userId}</code>)\n📞 <code>+${phone}</code>`);
-                    await ctx.reply('✅ <b>WhatsApp Account Linked Successfully!</b>\nYou can now create groups.', { parse_mode: 'HTML' });
+                    await ctx.reply('✅ <b>WhatsApp Account Linked Successfully!</b>\nYou can now create groups.' + BOT_FOOTER, { parse_mode: 'HTML' });
                     const u = await User.findOne({ user_id: userId });
                     const mainNum = u.main_number || phone;
                     await User.updateOne({ user_id: userId }, { $set: { is_connected: true, main_number: mainNum },$addToSet: { phone_numbers: phone } });
@@ -291,7 +297,7 @@ async function getActiveWASocket(userId) {
     } catch (e) { return null; }
 }
 
-// 6. PERMISSIONS KEYBOARD (MATCHING WHATSAPP SETTINGS SCREEN)
+// 6. PERMISSIONS KEYBOARD
 function getPermissionsKeyboard(perms, prefix = 'perm') {
     return Markup.inlineKeyboard([
         [Markup.button.callback(`✏️ Edit group settings: ${perms.editSettings ? '🔓 All' : '🔒 Admins'}`, `${prefix}_toggle_editSettings`)],
@@ -303,15 +309,18 @@ function getPermissionsKeyboard(perms, prefix = 'perm') {
     ]);
 }
 
-// 7. CREATE GROUP WIZARD
+// 7. CREATE GROUP WIZARD (WITH MEMBER ADD STEP & SKIP)
 async function initiateCreateGroup(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
     const u = await User.findOne({ user_id: ctx.from.id });
     if (!u || !u.is_connected || !u.phone_numbers || u.phone_numbers.length === 0) {
-        return ctx.reply("⚠️ <b>Action Required:</b> Please link your WhatsApp account first via <b>Login Account</b>.", { parse_mode: 'HTML' });
+        return ctx.reply("⚠️ <b>Action Required:</b> Please link your WhatsApp account first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
     }
     userState[ctx.from.id] = 'WIZARD_COUNT';
-    groupWizard[ctx.from.id] = { perms: { editSettings: false, sendMessages: true, addMembers: false, approveMembers: false } };
+    groupWizard[ctx.from.id] = { 
+        perms: { editSettings: false, sendMessages: true, addMembers: false, approveMembers: false },
+        participants: []
+    };
     ctx.reply("Enter number of groups to create (1-50):", Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]]));
 }
 bot.action('menu_create', initiateCreateGroup);
@@ -330,6 +339,22 @@ bot.action('skip_photo', async (ctx) => {
     if (userState[id] !== 'WIZARD_PHOTO') return;
     await ctx.answerCbQuery('Skipped');
     groupWizard[id].photoBuffer = null;
+    promptParticipantsStep(ctx, id);
+});
+
+function promptParticipantsStep(ctx, id) {
+    userState[id] = 'WIZARD_MEMBERS';
+    const text = "👥 Send phone numbers to add with country code (separated by comma, e.g., <code>919876543210, 918765432109</code>) or tap Skip:";
+    const kb = Markup.inlineKeyboard([[Markup.button.callback('⏭️ Skip', 'skip_members')], [Markup.button.callback('🛑 Cancel', 'stop_process')]]);
+    if (ctx.callbackQuery) ctx.editMessageText(text, { parse_mode: 'HTML', ...kb });
+    else ctx.reply(text, { parse_mode: 'HTML', ...kb });
+}
+
+bot.action('skip_members', async (ctx) => {
+    const id = ctx.from.id;
+    if (userState[id] !== 'WIZARD_MEMBERS') return;
+    await ctx.answerCbQuery('Members Skipped');
+    groupWizard[id].participants = [];
     showPermissionsWizard(ctx, id);
 });
 
@@ -371,35 +396,38 @@ function downloadFileBuffer(url) {
 async function executeBatchGroupCreation(ctx, id) {
     const wizard = groupWizard[id];
     userState[id] = 'PROCESSING';
-    const { count, baseName, startNum, desc, photoBuffer, perms } = wizard;
+    const { count, baseName, startNum, desc, photoBuffer, perms, participants } = wizard;
     const sock = await getActiveWASocket(id);
     if (!sock) {
         userState[id] = null; delete groupWizard[id];
-        return ctx.reply("❌ WhatsApp session disconnected. Please reconnect via <b>Login Account</b>.", { parse_mode: 'HTML' });
+        return ctx.reply("❌ WhatsApp session disconnected. Please reconnect via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
     }
 
     let progressMsg = await ctx.reply(`⏳ 0/${count} groups created...`).catch(()=>null);
     let successCount = 0, failCount = 0;
-    const groupLinks = [];
+    const groupResults = [];
 
     for (let i = 0; i < count; i++) {
-                const groupTitle = `${baseName} ${startNum + i}`.trim();
+        const groupTitle = `${baseName} ${startNum + i}`.trim();
         try {
-            const group = await sock.groupCreate(groupTitle, []);
+            const group = await sock.groupCreate(groupTitle, participants || []);
             const gid = group.id;
             if (desc) { try { await sock.groupUpdateDescription(gid, desc); } catch {} }
             if (photoBuffer) { try { await sock.updateProfilePicture(gid, photoBuffer); } catch {} }
 
-            // Group Permissions (Image settings)
+            // Group Permissions
             try { await sock.groupSettingUpdate(gid, perms.editSettings ? 'unlocked' : 'locked'); } catch {}
             try { await sock.groupSettingUpdate(gid, perms.sendMessages ? 'not_announcement' : 'announcement'); } catch {}
             try { await sock.groupMemberAddMode(gid, perms.addMembers ? 'all_member_add' : 'admin_add'); } catch {}
             try { await sock.groupJoinApprovalMode(gid, perms.approveMembers ? 'on' : 'off'); } catch {}
 
+            let inviteLink = 'Could not fetch link';
             try {
                 const inviteCode = await sock.groupInviteCode(gid);
-                if (inviteCode) groupLinks.push(`https://chat.whatsapp.com/${inviteCode}`);
+                if (inviteCode) inviteLink = `https://chat.whatsapp.com/${inviteCode}`;
             } catch {}
+
+            groupResults.push(`📁 <b>${groupTitle}</b>\n🔗 ${inviteLink}`);
             successCount++;
         } catch (err) { failCount++; }
 
@@ -410,8 +438,10 @@ async function executeBatchGroupCreation(ctx, id) {
     }
 
     userState[id] = null; delete groupWizard[id];
-    let report = `✅ ${successCount} done | ❌ ${failCount} failed.\n\n`;
-    if (groupLinks.length > 0) report += `🔗 <b>Group Links:</b>\n` + groupLinks.join('\n');
+    let report = `✅ ${successCount} done | ❌ ${failCount} failed.\n\n🔗 <b>Group Links:</b>\n\n`;
+    if (groupResults.length > 0) report += groupResults.join('\n\n');
+    report += BOT_FOOTER;
+
     await ctx.reply(report, { parse_mode: 'HTML', disable_web_page_preview: true });
     showHome(ctx);
 }
@@ -424,24 +454,103 @@ bot.on('photo', async (ctx) => {
             const fileLink = await ctx.telegram.getFileLink(photos[photos.length - 1].file_id);
             groupWizard[id].photoBuffer = await downloadFileBuffer(fileLink.href);
             await ctx.reply("Profile photo uploaded!");
-            showPermissionsWizard(ctx, id);
+            promptParticipantsStep(ctx, id);
         } catch (e) {
             ctx.reply(`❌ Failed to process photo. Tap Skip to continue:`, Markup.inlineKeyboard([[Markup.button.callback('⏭️ Skip', 'skip_photo')]]));
         }
     }
 });
 
-// 8. REMOVE MEMBERS (CHECKBOX MULTI-SELECT & KICK NON-ADMINS)
+// 8. COPY GC LINKS (EXTRACT INLINE OPTIONS)
+async function initiateCopyGCLinks(ctx) {
+    if (ctx.callbackQuery) await ctx.answerCbQuery();
+    const sock = await getActiveWASocket(ctx.from.id);
+    if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
+
+    await ctx.reply("🔍 Fetching your WhatsApp groups for links extraction... Please wait.");
+    try {
+        const groupsObj = await sock.groupFetchAllParticipating();
+        const groupsList = Object.values(groupsObj);
+        if (groupsList.length === 0) return ctx.reply("❌ No groups found on this WhatsApp account." + BOT_FOOTER, { parse_mode: 'HTML' });
+
+        copyLinkSelection[ctx.from.id] = { allGroups: groupsList, selectedJids: new Set() };
+        renderCopyLinksKeyboard(ctx, ctx.from.id, false);
+    } catch (e) { ctx.reply(`❌ Failed to fetch groups: ${e.message}`); }
+}
+bot.action('menu_copy_links', initiateCopyGCLinks);
+bot.hears('📋 Copy GC Links', initiateCopyGCLinks);
+
+function renderCopyLinksKeyboard(ctx, userId, isEdit = true) {
+    const session = copyLinkSelection[userId];
+    const buttons = [];
+    session.allGroups.forEach((grp, idx) => {
+        const isChecked = session.selectedJids.has(grp.id);
+        const title = (grp.subject || 'Unnamed Group').substring(0, 24);
+        buttons.push([Markup.button.callback(`${isChecked ? '☑️' : '⬜'} ${title}`, `cplink_grp_${idx}`)]);
+    });
+    buttons.push([
+        Markup.button.callback(`🔗 Get Links (${session.selectedJids.size})`, 'cplink_submit'),
+        Markup.button.callback('🛑 Cancel', 'stop_process')
+    ]);
+    const msg = '📋 <b>Select Groups to Copy Links</b>\n\nTap on groups to select/deselect, then click <b>Get Links</b>:';
+    if (isEdit) ctx.editMessageText(msg, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+    else ctx.reply(msg, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+}
+
+bot.action(/cplink_grp_(.+)/, async (ctx) => {
+    const id = ctx.from.id;
+    if (!copyLinkSelection[id]) return ctx.answerCbQuery();
+    const grp = copyLinkSelection[id].allGroups[parseInt(ctx.match[1])];
+    if (!grp) return;
+    if (copyLinkSelection[id].selectedJids.has(grp.id)) copyLinkSelection[id].selectedJids.delete(grp.id);
+    else copyLinkSelection[id].selectedJids.add(grp.id);
+    await ctx.answerCbQuery();
+    renderCopyLinksKeyboard(ctx, id, true);
+});
+
+bot.action('cplink_submit', async (ctx) => {
+    const id = ctx.from.id, session = copyLinkSelection[id];
+    if (!session || session.selectedJids.size === 0) return ctx.answerCbQuery('⚠️ Select at least one group!', { show_alert: true });
+    await ctx.answerCbQuery('Fetching Links...');
+    try { await ctx.deleteMessage(); } catch {}
+
+    const sock = await getActiveWASocket(id);
+    if (!sock) { delete copyLinkSelection[id]; return ctx.reply("❌ WhatsApp disconnected." + BOT_FOOTER, { parse_mode: 'HTML' }); }
+
+    const selectedJids = Array.from(session.selectedJids);
+    const results = [];
+    const waitMsg = await ctx.reply(`⏳ Generating invite links for ${selectedJids.length} groups...`);
+
+    for (const gid of selectedJids) {
+        const grp = session.allGroups.find(g => g.id === gid);
+        const name = grp ? grp.subject : 'WhatsApp Group';
+        try {
+            const code = await sock.groupInviteCode(gid);
+            results.push(`📁 <b>${name}</b>\n🔗 https://chat.whatsapp.com/${code}`);
+        } catch (e) {
+            results.push(`📁 <b>${name}</b>\n❌ <i>Could not fetch link (Admin rights required)</i>`);
+        }
+    }
+
+    delete copyLinkSelection[id];
+    try { await bot.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id); } catch {}
+
+    let responseMsg = `📋 <b>Extracted Group Links (${results.length}):</b>\n\n` + results.join('\n\n') + BOT_FOOTER;
+    await ctx.reply(responseMsg, { parse_mode: 'HTML', disable_web_page_preview: true });
+    showHome(ctx);
+});
+
+// 9. REMOVE MEMBERS (MULTI-SELECT & KICK NON-ADMINS)
 async function initiateRemoveMembers(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
     const sock = await getActiveWASocket(ctx.from.id);
-    if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>.", { parse_mode: 'HTML' });
+    if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
 
     await ctx.reply("🔍 Fetching your WhatsApp groups... Please wait.");
     try {
         const groupsObj = await sock.groupFetchAllParticipating();
         const groupsList = Object.values(groupsObj);
-        if (groupsList.length === 0) return ctx.reply("❌ No groups found on this account.");
+        if (groupsList.length === 0) return ctx.reply("❌ No groups found on this account." + BOT_FOOTER, { parse_mode: 'HTML' });
 
         removeSelection[ctx.from.id] = { allGroups: groupsList, selectedJids: new Set() };
         renderRemoveGroupsKeyboard(ctx, ctx.from.id, false);
@@ -486,7 +595,7 @@ bot.action('rem_submit', async (ctx) => {
 
     userState[id] = 'PROCESSING';
     const sock = await getActiveWASocket(id);
-    if (!sock) { userState[id] = null; delete removeSelection[id]; return ctx.reply("❌ WhatsApp session disconnected."); }
+    if (!sock) { userState[id] = null; delete removeSelection[id]; return ctx.reply("❌ WhatsApp session disconnected." + BOT_FOOTER, { parse_mode: 'HTML' }); }
 
     const selectedJids = Array.from(session.selectedJids);
     let totalRemoved = 0, groupsProcessed = 0;
@@ -495,7 +604,6 @@ bot.action('rem_submit', async (ctx) => {
     for (const gid of selectedJids) {
         try {
             const metadata = await sock.groupMetadata(gid);
-            // ADMINS KO CHOR KE SABKO REMOVE
             const nonAdmins = metadata.participants.filter(p => !p.admin).map(p => p.id);
             if (nonAdmins.length > 0) {
                 for (let i = 0; i < nonAdmins.length; i += 15) {
@@ -511,20 +619,20 @@ bot.action('rem_submit', async (ctx) => {
 
     userState[id] = null; delete removeSelection[id];
     try { await bot.telegram.deleteMessage(ctx.chat.id, progressMsg.message_id); } catch {}
-    await ctx.reply(`✅ <b>Removal Completed!</b>\n\n👥 <b>Total Members Removed:</b> ${totalRemoved}\n🏷 <b>Groups Cleaned:</b> ${groupsProcessed}/${selectedJids.length}\n🛡️ <i>All Group Admins were preserved safely.</i>`, { parse_mode: 'HTML' });
+    await ctx.reply(`✅ <b>Removal Completed!</b>\n\n👥 <b>Total Members Removed:</b> ${totalRemoved}\n🏷 <b>Groups Cleaned:</b> ${groupsProcessed}/${selectedJids.length}\n🛡️ <i>All Group Admins were preserved safely.</i>` + BOT_FOOTER, { parse_mode: 'HTML' });
     showHome(ctx);
 });
 
-// 9. EDIT GROUP PERMISSIONS
+// 10. EDIT GROUP PERMISSIONS
 async function initiateEditGroup(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
     const sock = await getActiveWASocket(ctx.from.id);
-    if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>.", { parse_mode: 'HTML' });
+    if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
     await ctx.reply("🔍 Loading your groups to configure permissions...");
     try {
         const groupsObj = await sock.groupFetchAllParticipating();
         const groupsList = Object.values(groupsObj);
-        if (groupsList.length === 0) return ctx.reply("❌ No groups found.");
+        if (groupsList.length === 0) return ctx.reply("❌ No groups found." + BOT_FOOTER, { parse_mode: 'HTML' });
         editGroupSelection[ctx.from.id] = { allGroups: groupsList, selectedGid: groupsList[0].id, perms: { editSettings: false, sendMessages: true, addMembers: false, approveMembers: false } };
         const buttons = groupsList.slice(0, 10).map(g => [Markup.button.callback(`📁 ${(g.subject || 'Group').substring(0, 25)}`, `sel_edit_grp_${g.id}`)]);
         buttons.push([Markup.button.callback('🛑 Cancel', 'stop_process')]);
@@ -557,22 +665,22 @@ bot.action('edperm_confirm', async (ctx) => {
     if (!session) return ctx.answerCbQuery();
     await ctx.answerCbQuery('Applying...');
     const sock = await getActiveWASocket(id);
-    if (!sock) return ctx.reply("❌ WhatsApp disconnected.");
+    if (!sock) return ctx.reply("❌ WhatsApp disconnected." + BOT_FOOTER, { parse_mode: 'HTML' });
     const { selectedGid: gid, perms } = session;
     try { await sock.groupSettingUpdate(gid, perms.editSettings ? 'unlocked' : 'locked'); } catch {}
     try { await sock.groupSettingUpdate(gid, perms.sendMessages ? 'not_announcement' : 'announcement'); } catch {}
     try { await sock.groupMemberAddMode(gid, perms.addMembers ? 'all_member_add' : 'admin_add'); } catch {}
     try { await sock.groupJoinApprovalMode(gid, perms.approveMembers ? 'on' : 'off'); } catch {}
     delete editGroupSelection[id];
-    await ctx.reply("✅ <b>Group Permissions Updated Successfully!</b>", { parse_mode: 'HTML' });
+    await ctx.reply("✅ <b>Group Permissions Updated Successfully!</b>" + BOT_FOOTER, { parse_mode: 'HTML' });
     showHome(ctx);
 });
 
-// 10. TEXT INPUT HANDLER
+// 11. TEXT INPUT HANDLER
 bot.on('text', async (ctx) => {
     const text = ctx.message.text.trim(), id = ctx.from.id;
     if (text.startsWith('/')) return;
-    if (['📊 Status', '➕ Create Group', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings', '📱 Login Account', '💎 Buy VIP', '❓ Help'].includes(text)) return;
+    if (['📊 Status', '➕ Create Group', '📋 Copy GC Links', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings', '📱 Login Account', '💎 Buy VIP', '❓ Help'].includes(text)) return;
 
     if (userState[id] === 'WAITING_NUMBER') {
         const phone = text.replace(/[^0-9]/g, '');
@@ -602,9 +710,21 @@ bot.on('text', async (ctx) => {
         groupWizard[id].desc = text; userState[id] = 'WIZARD_PHOTO';
         return ctx.reply("Send profile photo or tap Skip.", Markup.inlineKeyboard([[Markup.button.callback('⏭️ Skip', 'skip_photo')], [Markup.button.callback('🛑 Cancel', 'stop_process')]]));
     }
+    if (userState[id] === 'WIZARD_MEMBERS') {
+        const rawNumbers = text.split(/[\s,]+/);
+        const participants = rawNumbers
+            .map(num => num.replace(/[^0-9]/g, ''))
+            .filter(num => num.length >= 8 && num.length <= 16)
+            .map(num => `${num}@s.whatsapp.net`);
+
+        groupWizard[id].participants = participants;
+        await ctx.reply(`✅ Added ${participants.length} member(s) to group setup.`);
+        showPermissionsWizard(ctx, id);
+        return;
+    }
 });
 
-// 11. ADMIN COMMANDS
+// 12. ADMIN COMMANDS
 bot.command('addvip', async (ctx) => {
     if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) return;
     const [, targetId, days] = ctx.message.text.split(' ');
@@ -628,7 +748,7 @@ bot.command(['broadcast', 'bc'], async (ctx) => {
         try { await bot.telegram.sendMessage(u.user_id, `📢 <b>OFFICIAL ANNOUNCEMENT</b>\n\n${msg}`, { parse_mode: 'HTML' }); sent++; } catch { fail++; }
     }
     await bot.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, 
-        `✅ <b>Broadcast Completed!</b>\n\n👥 Total: ${allUsers.length}\n📨 Sent: ${sent}\n❌ Failed: ${fail}`, { parse_mode: 'HTML' }
+        `✅ <b>Broadcast Completed!</b>\n\n👥 Total: ${allUsers.length}\n📨 Sent: ${sent}\n❌ Failed: ${fail}` + BOT_FOOTER, { parse_mode: 'HTML' }
     );
 });
 
