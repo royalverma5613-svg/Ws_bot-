@@ -47,6 +47,7 @@ const User = mongoose.model('User', new mongoose.Schema({
 const activeSockets = {};
 const userPhoneNumbers = {};
 const userState = {};
+const groupCreationData = {};
 const spamTracker = {};
 
 // 3. MENUS & HELPERS
@@ -78,15 +79,11 @@ const getReplyKeyboard = () => Markup.keyboard([
 
 function cleanFolder(dir) {
     try {
-        if (fs.existsSync(dir)) {
-            fs.rmSync(dir, { recursive: true, force: true });
-        }
-    } catch (e) {
-        console.log('Cleanup error:', e.message);
-    }
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) { console.log('Cleanup error:', e.message); }
 }
 
-// 4. MIDDLEWARE: SPAM TRACKER & BUSY LOCK
+// 4. MIDDLEWARE
 bot.use(async (ctx, next) => {
     if (!ctx.from) return next();
     const id = ctx.from.id;
@@ -95,7 +92,7 @@ bot.use(async (ctx, next) => {
         if (ctx.callbackQuery && ['request_new_code', 'stop_process'].includes(ctx.callbackQuery.data)) {
             return next();
         }
-        const warning = '⏳ WhatsApp Linking is active! Enter code in WhatsApp or use buttons below:';
+        const warning = '⏳ Process chal raha hai! Niche diye buttons use karein:';
         const kb = Markup.inlineKeyboard([
             [Markup.button.callback('🔄 Get New Code', 'request_new_code')],
             [Markup.button.callback('🛑 Stop Service', 'stop_process')]
@@ -113,7 +110,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// 5. BOT ACTIONS & NAVIGATION
+// 5. NAVIGATION & ACTIONS
 async function checkSub(ctx) {
     try {
         const m = await ctx.telegram.getChatMember(FORCE_SUB_CHAT, ctx.from.id);
@@ -167,6 +164,7 @@ bot.action('stop_process', async (ctx) => {
     cleanFolder(`./auth_info_${id}`);
     userState[id] = null;
     delete userPhoneNumbers[id];
+    delete groupCreationData[id];
     await ctx.answerCbQuery('Service Stopped').catch(()=>{});
     await ctx.reply('🛑 <b>Service Stopped Successfully.</b>', { parse_mode: 'HTML' });
     showHome(ctx);
@@ -179,21 +177,58 @@ bot.action('buy_vip', (ctx) => {
 
 bot.action('menu_help', (ctx) => {
     ctx.answerCbQuery();
-    ctx.reply('📖 <b>How to Link:</b>\n\n1. Tap <b>Login Account</b>\n2. Send phone number with country code\n3. Tap pairing code to copy\n4. Open WhatsApp > Linked Devices > Link with phone number\n5. Paste the code.', { parse_mode: 'HTML' });
+    ctx.reply('📖 <b>How to use:</b>\n\n1. <b>Login Account:</b> WhatsApp number daal kar link karein.\n2. <b>Status:</b> Linked numbers aur VIP validity check karein.\n3. <b>Create Group:</b> Automatic group generate karein invite link ke sath.', { parse_mode: 'HTML' });
 });
 
-async function validateUserWA(ctx) {
+// STATUS PANEL (FIXED: Shows Real Linked Numbers & VIP Details)
+async function showUserStatus(ctx) {
+    if (ctx.callbackQuery) await ctx.answerCbQuery();
     const u = await User.findOne({ user_id: ctx.from.id });
     if (!u || !u.is_connected) {
-        if (ctx.callbackQuery) await ctx.answerCbQuery('⚠️ Link WhatsApp first!', { show_alert: true });
-        return ctx.reply("⚠️ <b>Action Required:</b> Please click <b>Login Account</b> to link your WhatsApp first.", { parse_mode: 'HTML' });
+        return ctx.reply("⚠️ <b>Action Required:</b> Aapka koi WhatsApp number linked nahi hai. Pehle <b>Login Account</b> par tap karein.", { parse_mode: 'HTML' });
     }
-    if (ctx.callbackQuery) ctx.answerCbQuery();
-    ctx.reply('📊 Your WhatsApp account is linked and ready!');
+
+    const numbersList = u.phone_numbers && u.phone_numbers.length > 0 
+        ? u.phone_numbers.map((num, i) => `${i + 1}. <code>+${num}</code>`).join('\n') 
+        : 'Koi number save nahi hai';
+
+    const isVip = u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+    const expiryDate = u.vip_expiry ? new Date(u.vip_expiry * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Expired';
+
+    const statusMsg = `📊 <b>WHATSAPP & ACCOUNT STATUS</b>\n\n` +
+        `👤 <b>User ID:</b> <code>${ctx.from.id}</code>\n` +
+        `💎 <b>VIP Status:</b> ${isVip ? '✅ Active VIP' : '❌ Inactive / Free Trial Ended'}\n` +
+        `⏳ <b>Validity:</b> ${expiryDate}\n\n` +
+        `📱 <b>Linked WhatsApp Numbers:</b>\n${numbersList}\n\n` +
+        `⚡ <b>Engine:</b> 🟢 Active & Ready`;
+
+    ctx.reply(statusMsg, { parse_mode: 'HTML' });
 }
 
-bot.action(['menu_status', 'menu_create', 'menu_edit', 'menu_remove', 'menu_settings'], validateUserWA);
-bot.hears(['📊 Status', '➕ Create Group', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings'], validateUserWA);
+bot.action('menu_status', showUserStatus);
+bot.hears('📊 Status', showUserStatus);
+
+// GROUP CREATION FLOW
+async function initiateCreateGroup(ctx) {
+    if (ctx.callbackQuery) await ctx.answerCbQuery();
+    const u = await User.findOne({ user_id: ctx.from.id });
+    if (!u || !u.is_connected) {
+        return ctx.reply("⚠️ <b>Action Required:</b> Group banane ke liye pehle WhatsApp link hona chahiye. <b>Login Account</b> karein.", { parse_mode: 'HTML' });
+    }
+
+    userState[ctx.from.id] = 'WAITING_GROUP_NAME';
+    ctx.reply("➕ <b>Group Creation Setup</b>\n\nNaye group ka <b>Title / Name</b> bhejiye:", {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]])
+    });
+}
+
+bot.action('menu_create', initiateCreateGroup);
+bot.hears('➕ Create Group', initiateCreateGroup);
+
+bot.hears(['🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings'], (ctx) => {
+    ctx.reply("⚙️ Yeh feature VIP background maintenance mein hai. Jald live hoga!");
+});
 
 function promptLogin(ctx) {
     userState[ctx.from.id] = 'WAITING_NUMBER';
@@ -207,6 +242,7 @@ bot.action('menu_login', (ctx) => { ctx.answerCbQuery(); promptLogin(ctx); });
 bot.hears('💎 Buy VIP', (ctx) => ctx.reply('💎 Contact @egofiremax for VIP access.'));
 bot.hears('❓ Help', (ctx) => ctx.reply('📖 Send your WhatsApp number in Login Account to pair.', { parse_mode: 'HTML' }));
 
+// ADMIN VIP COMMAND
 bot.command('addvip', async (ctx) => {
     if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) return;
     const [, targetId, days] = ctx.message.text.split(' ');
@@ -219,7 +255,39 @@ bot.command('addvip', async (ctx) => {
     } else ctx.reply('❌ User not found.');
 });
 
-// 6. WHATSAPP ENGINE: STABLE PAIRING
+// 6. WHATSAPP CONNECTION & ACTIVE SOCKET MANAGER
+async function getActiveWASocket(userId) {
+    if (activeSockets[userId]) return activeSockets[userId];
+
+    const sessionDir = `./auth_info_${userId}`;
+    if (!fs.existsSync(sessionDir)) return null;
+
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+        const { version } = await fetchLatestBaileysVersion();
+        const logger = pino({ level: 'silent' });
+
+        const sock = makeWASocket({
+            version,
+            printQRInTerminal: false,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            logger,
+            browser: ['Ubuntu', 'Chrome', '20.0.0.0'],
+            syncFullHistory: false
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+        activeSockets[userId] = sock;
+        return sock;
+    } catch (e) {
+        console.log('Error reloading socket:', e.message);
+        return null;
+    }
+}
+
 async function startWhatsAppPairing(userId, phone, ctx) {
     userState[userId] = 'PROCESSING';
     userPhoneNumbers[userId] = phone;
@@ -231,7 +299,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
     }
     cleanFolder(sessionDir);
 
-    await ctx.reply(`⏳ Requesting secure pairing code for <b>+${phone}</b>...\n<i>(Connecting to WhatsApp...)</i>`, {
+    await ctx.reply(`⏳ Requesting secure pairing code for <b>+${phone}</b>...`, {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]])
     });
@@ -270,10 +338,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
 
                 if (connection === 'close') {
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
-                    console.log(`[WA Socket Closed] User: ${userId}, Status: ${statusCode}`);
-
                     if (statusCode === 515 && userState[userId] === 'PROCESSING') {
-                        console.log('Handshake in progress (515)... Reconnecting socket immediately');
                         initSocket();
                     } else if (statusCode === DisconnectReason.loggedOut) {
                         cleanFolder(sessionDir);
@@ -283,12 +348,11 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                 }
 
                 if (connection === 'open') {
-                    delete activeSockets[userId];
                     userState[userId] = null;
                     delete userPhoneNumbers[userId];
 
                     sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESS</b>\n\n👤 User: @${ctx.from.username || 'None'} (<code>${userId}</code>)\n📞 <code>${phone}</code>\n⏱ ${getFormattedTime()}`);
-                    await ctx.reply('✅ <b>WhatsApp Account Linked Successfully!</b>\nYou can now automate groups.', { parse_mode: 'HTML' });
+                    await ctx.reply('✅ <b>WhatsApp Account Linked Successfully!</b>\nAb aap <b>Create Group</b> feature use kar sakte hain.', { parse_mode: 'HTML' });
                     await User.updateOne({ user_id: userId }, { $set: { is_connected: true },$addToSet: { phone_numbers: phone } });
                     showHome(ctx);
                 }
@@ -303,7 +367,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             c = c?.match(/.{1,4}/g)?.join('-') || c;
 
                             await ctx.reply(
-                                `✅ <b>Your WhatsApp Pairing Code:</b>\n\n<code>${c}</code>\n\n👉 <i>Tap on the code to copy it instantly!</i>\n\n1. Open <b>WhatsApp</b> on your phone\n2. Tap <b>Settings > Linked Devices</b>\n3. Tap <b>Link a Device > Link with phone number instead</b>\n4. Enter the code above.\n\n⚠️ If code expires, tap <b>🔄 Get New Code</b> below:`,
+                                `✅ <b>Your WhatsApp Pairing Code:</b>\n\n<code>${c}</code>\n\n👉 <i>Tap on the code to copy it instantly!</i>\nEnter this in WhatsApp Linked Devices.\n\n⚠️ If code expires, tap <b>🔄 Get New Code</b> below:`,
                                 {
                                     parse_mode: 'HTML',
                                     ...Markup.inlineKeyboard([
@@ -314,7 +378,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             );
                         }
                     } catch (e) {
-                        ctx.reply(`❌ Could not generate pairing code: ${e.message}\n\nTap below to retry.`, {
+                        ctx.reply(`❌ Could not generate pairing code: ${e.message}`, {
                             parse_mode: 'HTML',
                             ...Markup.inlineKeyboard([
                                 [Markup.button.callback('🔄 Try Again', 'request_new_code')],
@@ -324,10 +388,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                     }
                 }, 3500);
             }
-
-        } catch (e) {
-            console.log('Socket Init Error:', e.message);
-        }
+        } catch (e) { console.log('Socket Init Error:', e.message); }
     }
 
     initSocket();
@@ -346,18 +407,89 @@ bot.action('request_new_code', async (ctx) => {
     startWhatsAppPairing(id, phone, ctx);
 });
 
+// 7. TEXT MESSAGE HANDLER FOR ALL STATES
 bot.on('text', async (ctx) => {
     const text = ctx.message.text.trim();
     const id = ctx.from.id;
+
     if (text.startsWith('/')) return;
     if (['📱 Login Account', '📊 Status', '➕ Create Group', '🗑️ Remove Members', '✏️ Edit Group', '⚙️ Settings', '💎 Buy VIP', '❓ Help'].includes(text)) return;
 
+    // Login Number Input
     if (userState[id] === 'WAITING_NUMBER') {
         const phone = text.replace(/[^0-9]/g, '');
         if (phone.length < 10 || phone.length > 15) {
             return ctx.reply('❌ Invalid format! Please send your number with country code (e.g., 919876XXXXX).');
         }
         startWhatsAppPairing(id, phone, ctx);
+        return;
+    }
+
+    // Create Group: Step 1 (Group Name)
+    if (userState[id] === 'WAITING_GROUP_NAME') {
+        groupCreationData[id] = { title: text };
+        userState[id] = 'WAITING_GROUP_MEMBERS';
+        return ctx.reply(`✅ Group Title set to: <b>${text}</b>\n\nAb jin numbers ko group mein add karna hai unhe bhejiye (comma ya space se separate karein, e.g., <code>919876543210, 918765432109</code>):\n\n<i>Ya bina kisi member ke sirf group banane ke liye <b>0</b> likhkar bhejein.</i>`, {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]])
+        });
+    }
+
+    // Create Group: Step 2 (Group Members & Execution)
+    if (userState[id] === 'WAITING_GROUP_MEMBERS') {
+        const title = groupCreationData[id]?.title || 'New WhatsApp Group';
+        let participants = [];
+
+        if (text !== '0') {
+            const rawNumbers = text.split(/[\s,]+/);
+            participants = rawNumbers
+                .map(num => num.replace(/[^0-9]/g, ''))
+                .filter(num => num.length >= 10 && num.length <= 15)
+                .map(num => `${num}@s.whatsapp.net`);
+        }
+
+        userState[id] = 'PROCESSING';
+        await ctx.reply(`⏳ WhatsApp par <b>${title}</b> group banaya ja raha hai...`, { parse_mode: 'HTML' });
+
+        try {
+            const sock = await getActiveWASocket(id);
+            if (!sock) {
+                userState[id] = null;
+                return ctx.reply("❌ WhatsApp session disconnected hai. Kripya pehle <b>Login Account</b> karke reconnect karein.", { parse_mode: 'HTML' });
+            }
+
+            const group = await sock.groupCreate(title, participants);
+            let inviteCode = '';
+            try { inviteCode = await sock.groupInviteCode(group.id); } catch(e){}
+
+            const inviteLink = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : 'Could not fetch link';
+
+            userState[id] = null;
+            delete groupCreationData[id];
+
+            sendLog(`🎉 <b>GROUP CREATED SUCCESSFULLY</b>\n\n👤 User: @${ctx.from.username || 'None'} (<code>${id}</code>)\n🏷 Title: <b>${title}</b>\n🔗 Link: ${inviteLink}\n⏱ ${getFormattedTime()}`);
+
+            await ctx.reply(
+                `✅ <b>Group Successfully Created!</b>\n\n` +
+                `🏷 <b>Group Name:</b> ${title}\n` +
+                `👥 <b>Members Added:</b> ${participants.length}\n` +
+                `🔗 <b>Invite Link:</b>\n${inviteLink}`,
+                { parse_mode: 'HTML' }
+            );
+            showHome(ctx);
+
+        } catch (err) {
+            userState[id] = null;
+            delete groupCreationData[id];
+            ctx.reply(`❌ Group create karne mein error aaya: ${err.message}`);
+            showHome(ctx);
+
+        } catch (err) {
+            userState[id] = null;
+            delete groupCreationData[id];
+            ctx.reply(`❌ Group create karne mein error aaya: ${err.message}`);
+            showHome(ctx);
+        }
     }
 });
 
