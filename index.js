@@ -1,57 +1,153 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
-const translate = require('translate-google');
 const express = require('express');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 
-// 24/7 Web Server (Render ke liye)
+// ==========================================
+// 1. SERVER, HTML & CONFIGURATION
+// ==========================================
 const app = express();
-app.get('/', (req, res) => res.send('Ws_gc_2xbot is Running!'));
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Ws_gc_2xbot Status</title>
+            <style>
+                body { background-color: #0f172a; color: #10b981; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
+                .container { background: #1e293b; padding: 40px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+                h1 { color: #38bdf8; margin-bottom: 10px; }
+                p { font-size: 1.2rem; color: #cbd5e1; }
+                .status { margin-top: 20px; font-weight: bold; background: #064e3b; padding: 10px; border-radius: 8px; color: #34d399; }
+                .footer { margin-top: 30px; font-size: 0.9rem; color: #64748b; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🚀 Ws_gc_2xbot Master Engine</h1>
+                <p>24/7 Automation & WhatsApp Engine</p>
+                <div class="status">✅ System is Live & Running</div>
+                <div class="footer">Developed for Telegram Automation</div>
+            </div>
+        </body>
+        </html>
+    `);
+});
 app.listen(process.env.PORT || 3000);
 
-// Aapki khaas details
-const TG_BOT_TOKEN = '8992778279:AAHH7zvVcF3Oh1_KA3QR5Q_qRG7eEA6t02c';
+const TG_BOT_TOKEN = '8992778279:AAHH7zvVcF3Oh1_KA3QR5Q_qRG7eEA6t02c'; // Aapka Naya Token
 const ADMIN_ID = 7959829014;
-const UPI_ID = 'kumar.14534@superyes';
+const ADMIN_USERNAME = 'egofiremax';
+const LOG_CHANNEL = '@data5k';
 const FORCE_SUB_CHAT_ID = '@ai2kmm';
 const FORCE_SUB_LINK = 'https://t.me/ai2kmm';
 
-// MongoDB Connection
+const bot = new Telegraf(TG_BOT_TOKEN);
+
+// ==========================================
+// 2. DATABASE & SCHEMAS (MONGODB)
+// ==========================================
 const MONGODB_URI = process.env.MONGODB_URI; 
 if (MONGODB_URI) {
-    mongoose.connect(MONGODB_URI)
-      .then(() => console.log('MongoDB Connected!'))
-      .catch(err => console.log(err));
+    mongoose.connect(MONGODB_URI).then(() => sendLog('🟢 <b>Database Connected Successfully!</b>')).catch(err => console.log(err));
 }
 
-// User Database Structure
 const UserSchema = new mongoose.Schema({
     user_id: Number,
+    username: String,
     language: { type: String, default: 'en' },
     is_vip: { type: Number, default: 0 },
-    vip_expiry: Number
+    vip_expiry: { type: Number, default: 0 }, 
+    joined_at: { type: Date, default: Date.now },
+    phone_numbers: [String] 
 });
 const User = mongoose.model('User', UserSchema);
 
-const bot = new Telegraf(TG_BOT_TOKEN);
-
-// Teeno Languages ka Text Data
+// ==========================================
+// 3. MULTI-LANGUAGE DATA & HELP MENU
+// ==========================================
 const langData = {
-    en: { welcome: "🎉 Welcome! Select language:", menu: "🏠 **Main Menu**\nSelect an option:", btn_login: "📱 Login Account", btn_status: "📊 Status", btn_create: "➕ Create Group", btn_remove: "🗑️ Remove Members", btn_edit: "✏️ Edit Group", btn_settings: "⚙️ Settings", btn_lang: "🌐 Change Lang", btn_vip: "💎 Buy VIP", vip_text: `💎 **VIP PLANS:**\n• 1 Day = ₹30\n• 7 Days = ₹120\n• 14 Days = ₹220\n• 1 Month = ₹350\n💳 **UPI:** \`${UPI_ID}\`\nSend screenshot to admin.`, lang_changed: "✅ Language changed to English." },
-    id: { welcome: "🎉 Selamat datang! Pilih bahasa:", menu: "🏠 **Menu Utama**\nPilih opsi:", btn_login: "📱 Masuk Akun", btn_status: "📊 Status", btn_create: "➕ Buat Grup", btn_remove: "🗑️ Hapus Anggota", btn_edit: "✏️ Edit Grup", btn_settings: "⚙️ Pengaturan", btn_lang: "🌐 Ganti Bahasa", btn_vip: "💎 Beli VIP", vip_text: `💎 **PAKET VIP:**\n• 1 Hari = ₹30\n• 7 Hari = ₹120\n• 14 Hari = ₹220\n• 1 Bulan = ₹350\n💳 **UPI:** \`${UPI_ID}\`\nKirim ke admin.`, lang_changed: "✅ Bahasa diubah." },
-    zh: { welcome: "🎉 欢迎！请选择您的语言：", menu: "🏠 **主菜单**\n选择一个选项：", btn_login: "📱 登录", btn_status: "📊 状态", btn_create: "➕ 创建群组", btn_remove: "🗑️ 删除成员", btn_edit: "✏️ 编辑群组", btn_settings: "⚙️ 设置", btn_lang: "🌐 更改语言", btn_vip: "💎 购买 VIP", vip_text: `💎 **VIP 套餐:**\n• 1 天 = ₹30\n• 7 天 = ₹120\n• 14 天 = ₹220\n• 1 个月 = ₹350\n💳 **UPI:** \`${UPI_ID}\`\n发送给管理员。`, lang_changed: "✅ 语言已更改。" }
+    en: { 
+        menu: "🏠 **Main Menu**\nSelect an option:", 
+        btn_login: "📱 Login Account", btn_status: "📊 Status", btn_create: "➕ Create Group", btn_remove: "🗑️ Remove Members", btn_edit: "✏️ Edit Group", btn_settings: "⚙️ Settings", btn_lang: "🌐 Change Lang", btn_vip: "💎 Buy VIP", btn_help: "❓ Help",
+        help_text: "📖 **How to use this Bot:**\n\n1. Click on **Login Account**.\n2. Send your WhatsApp number with country code (e.g., 919876XXXXX).\n3. You will receive an 8-digit Pairing Code.\n4. Enter this code in your linked WhatsApp devices.\n5. Once connected, use **Create Group** to automate your tasks!\n\n⚠️ *VIP is required for unlimited usage.*"
+    },
+    id: { 
+        menu: "🏠 **Menu Utama**\nPilih opsi:", 
+        btn_login: "📱 Masuk Akun", btn_status: "📊 Status", btn_create: "➕ Buat Grup", btn_remove: "🗑️ Hapus Anggota", btn_edit: "✏️ Edit Grup", btn_settings: "⚙️ Pengaturan", btn_lang: "🌐 Ganti Bahasa", btn_vip: "💎 Beli VIP", btn_help: "❓ Bantuan",
+        help_text: "📖 **Cara menggunakan Bot ini:**\n\n1. Klik **Masuk Akun**.\n2. Kirim nomor WhatsApp Anda (contoh: 628123XXXXX).\n3. Dapatkan Kode Pemasangan 8 digit.\n4. Masukkan kode di WhatsApp Anda.\n5. Gunakan **Buat Grup** untuk otomatisasi!\n\n⚠️ *Akses VIP diperlukan untuk tanpa batas.*"
+    },
+    zh: { 
+        menu: "🏠 **主菜单**\n选择一个选项：", 
+        btn_login: "📱 登录账号", btn_status: "📊 状态", btn_create: "➕ 创建群组", btn_remove: "🗑️ 删除成员", btn_edit: "✏️ 编辑群组", btn_settings: "⚙️ 设置", btn_lang: "🌐 更改语言", btn_vip: "💎 购买 VIP", btn_help: "❓ 帮助",
+        help_text: "📖 **如何使用此机器人:**\n\n1. 点击 **登录账号**。\n2. 发送带国家代码的WhatsApp号码。\n3. 获取8位配对码。\n4. 在您的WhatsApp中输入此代码。\n5. 使用 **创建群组** 自动执行任务！\n\n⚠️ *无限制使用需要VIP。*"
+    }
 };
 
-function getMainMenu(userLang) {
-    const t = langData[userLang] || langData['en'];
+function getMainMenu(lang) {
+    const t = langData[lang] || langData['en'];
     return Markup.inlineKeyboard([
-        [Markup.button.callback(t.btn_login, 'menu_login'), Markup.button.callback(t.btn_status, 'menu_status')],
-        [Markup.button.callback(t.btn_create, 'menu_create'), Markup.button.callback(t.btn_remove, 'menu_remove')],
-        [Markup.button.callback(t.btn_edit, 'menu_edit'), Markup.button.callback(t.btn_settings, 'menu_settings')],
-        [Markup.button.callback(t.btn_lang, 'change_lang'), Markup.button.callback(t.btn_vip, 'buy_vip')]
+        [Markup.button.callback(t.btn_login, 'menu_login'), Markup.button.callback(t.btn_create, 'menu_create')],
+        [Markup.button.callback(t.btn_edit, 'menu_edit'), Markup.button.callback(t.btn_remove, 'menu_remove')],
+        [Markup.button.callback(t.btn_status, 'menu_status'), Markup.button.callback(t.btn_settings, 'menu_settings')],
+        [Markup.button.callback(t.btn_vip, 'buy_vip'), Markup.button.callback(t.btn_help, 'menu_help')],
+        [Markup.button.callback(t.btn_lang, 'change_lang')]
     ]);
 }
 
-// Force Sub Check
+// ==========================================
+// 4. LOGGING & HEARTBEAT ENGINE (@data5k)
+// ==========================================
+async function sendLog(message) {
+    try {
+        await bot.telegram.sendMessage(LOG_CHANNEL, message, { parse_mode: 'HTML' });
+    } catch (e) { console.log("Log send failed:", e.message); }
+}
+
+// 5-Hour Heartbeat Ping
+setInterval(() => {
+    const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+    sendLog(`⚙️ <b>SYSTEM HEARTBEAT</b>\n\n⏱ Time: ${time} (IST)\n✅ All group maker services, MongoDB, and WhatsApp Engines are running smoothly.`);
+}, 5 * 60 * 60 * 1000);
+
+// ==========================================
+// 5. BOT CORE LOGIC & ANTI-SPAM
+// ==========================================
+const userState = {};
+const spamTracker = {};
+
+async function checkVip(userId) {
+    const user = await User.findOne({ user_id: userId });
+    if (!user || user.is_vip === 0) return false;
+    if (Date.now() / 1000 > user.vip_expiry) {
+        await User.updateOne({ user_id: userId }, { is_vip: 0, vip_expiry: 0 });
+        sendLog(`🔻 <b>VIP Expired:</b>\nUser ID: <code>${userId}</code>\nTheir VIP access has been automatically revoked.`);
+        return false;
+    }
+    return true;
+}
+
+bot.use(async (ctx, next) => {
+    if (ctx.from) {
+        const id = ctx.from.id;
+        const now = Date.now();
+        if (!spamTracker[id]) spamTracker[id] = [];
+        spamTracker[id].push(now);
+        spamTracker[id] = spamTracker[id].filter(time => now - time < 3000); 
+        
+        if (spamTracker[id].length > 5) {
+            if (spamTracker[id].length === 6) { 
+                sendLog(`⚠️ <b>SPAM ALERT!</b>\nUser: @${ctx.from.username || 'NoUsername'}\nID: <code>${id}</code>\nAction: Flooding the bot.`);
+            }
+            return; 
+        }
+    }
+    return next();
+});
+
 async function isSubscribed(ctx) {
     try {
         const chatMember = await ctx.telegram.getChatMember(FORCE_SUB_CHAT_ID, ctx.from.id);
@@ -60,6 +156,7 @@ async function isSubscribed(ctx) {
 }
 
 bot.command('start', async (ctx) => {
+    userState[ctx.from.id] = null;
     const subscribed = await isSubscribed(ctx);
     if (!subscribed) {
         return ctx.reply('⚠️ Join our channel to use this bot.', Markup.inlineKeyboard([[Markup.button.url('🔔 Join Channel', FORCE_SUB_LINK)], [Markup.button.callback('✅ Verify', 'check_sub')]]));
@@ -81,8 +178,16 @@ async function showMainMenu(ctx) {
     try {
         let user = await User.findOne({ user_id: ctx.from.id });
         if (!user) {
-            user = new User({ user_id: ctx.from.id, is_vip: 1, vip_expiry: Math.floor(Date.now() / 1000) + (24 * 60 * 60) });
+            user = new User({ 
+                user_id: ctx.from.id, 
+                username: ctx.from.username || 'NoUsername',
+                is_vip: 1, 
+                vip_expiry: Math.floor(Date.now() / 1000) + (24 * 60 * 60) 
+            });
             await user.save();
+            
+            sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 Username: @${user.username}\n🆔 User ID: <code>${user.user_id}</code>\n🎁 Status: 1 Day Free Trial Activated.`);
+            
             return ctx.reply("🎉 Welcome! Select language:", Markup.inlineKeyboard([
                 [Markup.button.callback('🇬🇧 English', 'lang_en'), Markup.button.callback('🇮🇩 Indo', 'lang_id'), Markup.button.callback('🇨🇳 中文', 'lang_zh')]
             ]));
@@ -95,51 +200,111 @@ async function showMainMenu(ctx) {
 bot.action(/lang_(.+)/, async (ctx) => {
     const lang = ctx.match[1];
     await User.findOneAndUpdate({ user_id: ctx.from.id }, { language: lang });
-    const t = langData[lang];
-    ctx.editMessageText(t.lang_changed + "\n\n" + t.menu, getMainMenu(lang));
+    ctx.editMessageText("✅ Language saved.\n\n" + langData[lang].menu, getMainMenu(lang));
 });
 
-bot.action('change_lang', (ctx) => {
-    ctx.editMessageText("Select new language:", Markup.inlineKeyboard([
-        [Markup.button.callback('🇬🇧 English', 'lang_en'), Markup.button.callback('🇮🇩 Indo', 'lang_id'), Markup.button.callback('🇨🇳 中文', 'lang_zh')]
-    ]));
-});
-
-bot.action('buy_vip', async (ctx) => {
-    let user = await User.findOne({ user_id: ctx.from.id });
-    const userLang = user ? user.language : 'en';
-    ctx.reply(langData[userLang].vip_text, { parse_mode: 'Markdown' });
+bot.action('menu_help', async (ctx) => {
+    const user = await User.findOne({ user_id: ctx.from.id });
+    const lang = user ? user.language : 'en';
+    ctx.reply(langData[lang].help_text, { parse_mode: 'Markdown' });
     ctx.answerCbQuery();
 });
 
-bot.action('menu_login', (ctx) => {
-    ctx.reply("Send number with country code (e.g., 919876XXXXX):");
-    ctx.answerCbQuery();
-});
-
-// Broadcast Command
-bot.command('addbroadcast', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return ctx.reply('🚫 Owner only.');
-    const messageText = ctx.message.text.replace('/addbroadcast', '').trim();
-    if (!messageText) return ctx.reply('Usage: `/addbroadcast Your message here`', {parse_mode: 'Markdown'});
-    
-    ctx.reply('⏳ Broadcasting and translating... Please wait.');
-    
-    let users = await User.find({});
-    let success = 0;
-    for (let user of users) {
-        try {
-            let targetLang = user.language === 'zh' ? 'zh-cn' : user.language;
-            let textToSend = messageText;
-            if (targetLang !== 'en') {
-                textToSend = await translate(messageText, {to: targetLang});
-            }
-            await bot.telegram.sendMessage(user.user_id, textToSend);
-            success++;
-        } catch (e) {}
+// ==========================================
+// 6. ADD VIP COMMAND (/addvip)
+// ==========================================
+bot.command('addvip', async (ctx) => {
+    if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) {
+        return ctx.reply("🚫 Only Owner can use this command.");
     }
-    ctx.reply(`✅ Broadcast finished. Sent to ${success} users.`);
+    
+    const parts = ctx.message.text.split(' ');
+    if (parts.length !== 3) {
+        return ctx.reply("⚠️ Format: `/addvip <user_id> <days>`", { parse_mode: 'Markdown' });
+    }
+    
+    const targetId = parseInt(parts[1]);
+    const days = parseInt(parts[2]);
+    
+    const expiryTime = Math.floor(Date.now() / 1000) + (days * 24 * 60 * 60);
+    
+    const user = await User.findOneAndUpdate(
+        { user_id: targetId },
+        { is_vip: 1, vip_expiry: expiryTime },
+        { new: true }
+    );
+    
+    if (user) {
+        ctx.reply(`✅ Successfully added VIP to ${targetId} for ${days} days.`);
+        sendLog(`💎 <b>VIP ACTIVATED (By Admin)</b>\n\n👤 Target ID: <code>${targetId}</code>\n⏳ Duration: ${days} Days\n📅 Valid until: ${new Date(expiryTime * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+        bot.telegram.sendMessage(targetId, `🎉 Congratulations! Your VIP access has been activated for ${days} days!`).catch(()=>{});
+    } else {
+        ctx.reply("❌ User not found in database.");
+    }
+});
+
+// ==========================================
+// 7. WHATSAPP ENGINE (PAIRING CODE)
+// ==========================================
+bot.action('menu_login', (ctx) => {
+    userState[ctx.from.id] = 'WAITING_NUMBER';
+    ctx.reply("📱 Send your WhatsApp number with country code (e.g., 919876XXXXX):");
+    ctx.answerCbQuery();
+});
+
+bot.on('text', async (ctx) => {
+    const text = ctx.message.text.trim();
+    const userId = ctx.from.id;
+
+    if (text.startsWith('/')) return;
+
+    if (userState[userId] === 'WAITING_NUMBER') {
+        const phoneRegex = /^\+?[0-9]{10,15}$/;
+        if (!phoneRegex.test(text)) {
+            return ctx.reply("❌ Invalid format! Please send only numbers (e.g., 919876XXXXX).");
+        }
+        
+        const phoneNumber = text.replace('+', '');
+        userState[userId] = null; 
+        
+        sendLog(`📲 <b>WHATSAPP LOGIN ATTEMPT</b>\n\n👤 User ID: <code>${userId}</code>\n📞 Target Number: <code>${phoneNumber}</code>`);
+        
+        ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(System is communicating with WhatsApp, please wait up to 10 seconds...)*`, {parse_mode: 'Markdown'});
+        
+        try {
+            const { state, saveCreds } = await useMultiFileAuthState(`./auth_info_${userId}`);
+            const { version } = await fetchLatestBaileysVersion();
+            
+            const waSock = makeWASocket({
+                version,
+                printQRInTerminal: false,
+                auth: state,
+                logger: pino({ level: "silent" }),
+                browser: ["Mac OS", "Chrome", "10.0.0"]
+            });
+            
+            waSock.ev.on("creds.update", saveCreds);
+            
+            setTimeout(async () => {
+                try {
+                    let code = await waSock.requestPairingCode(phoneNumber);
+                    code = code?.match(/.{1,4}/g)?.join("-") || code;
+                    ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp._`, {parse_mode: 'Markdown'});
+                    sendLog(`🔑 <b>CODE GENERATED</b>\nUser: <code>${userId}</code>\nNumber: <code>${phoneNumber}</code>`);
+                    
+                    await User.updateOne({ user_id: userId }, { $addToSet: { phone_numbers: phoneNumber } });
+                } catch (e) {
+                    ctx.reply("❌ Failed to generate code. Ensure the number is registered on WhatsApp and try again.");
+                    sendLog(`❌ <b>CODE FAILED</b>\nUser: <code>${userId}</code>\nError: ${e.message}`);
+                }
+            }, 3000);
+            
+        } catch (error) {
+            ctx.reply("❌ Critical Server Error in WhatsApp Engine.");
+        }
+    }
 });
 
 bot.launch();
-console.log('Bot Started...');
+console.log('Master Bot Started...');
+    
