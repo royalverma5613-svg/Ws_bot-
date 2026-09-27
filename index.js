@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -343,7 +343,6 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
     userPhoneNumbers[userId] = phoneNumber;
     const sessionPath = `./auth_info_${userId}`;
 
-    // Clean old session
     if (activeSockets[userId]) {
         try { activeSockets[userId].end(new Error("New session started")); } catch(e){}
         delete activeSockets[userId];
@@ -369,7 +368,7 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
                 printQRInTerminal: false,
                 auth: state,
                 logger: pino({ level: "silent" }),
-                browser: Browsers.ubuntu('Chrome'),
+                browser: ["Ubuntu", "Chrome", "22.04.4"],
                 syncFullHistory: false,
                 markOnlineOnConnect: true,
                 connectTimeoutMs: 60000,
@@ -383,16 +382,11 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
             waSock.ev.on("connection.update", async (update) => {
                 const { connection, lastDisconnect } = update;
 
-                // CRITICAL FIX: Jab aap code dalte hain, WhatsApp 515 (restartRequired) bhejta hai
                 if (connection === 'close') {
                     const statusCode = lastDisconnect?.error?.output?.statusCode;
                     const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-                    console.log(`[WA Socket Closed] Status: ${statusCode}, Reconnect: ${shouldReconnect}`);
-
                     if (shouldReconnect && userState[userId] === 'PROCESSING') {
-                        // WhatsApp handshake complete karne ke liye socket ko reconnect kar rahe hain
-                        console.log("Reconnecting socket to finalize login handshake...");
                         connectSocket();
                     } else if (statusCode === DisconnectReason.loggedOut) {
                         deleteFolderRecursive(sessionPath);
@@ -401,7 +395,6 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
                     }
                 }
 
-                // CRITICAL FIX: Jab handshake complete ho jaye tab hi success trigger hoga
                 if (connection === 'open') {
                     if (activeSockets[userId]) {
                         delete activeSockets[userId];
@@ -416,7 +409,6 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
                 }
             });
 
-            // Pairing code request (Only if NOT already registered)
             if (!waSock.authState.creds.registered && !codeRequested) {
                 setTimeout(async () => {
                     try {
@@ -431,4 +423,14 @@ async function startWhatsAppPairing(userId, phoneNumber, ctx) {
                                     parse_mode: 'HTML',
                                     ...Markup.inlineKeyboard([
                                         [Markup.button.callback('🔄 Get New Code', 'request_new_code')],
-         
+                                        [Markup.button.callback('🛑 Stop Service', 'stop_process')]
+                                    ])
+                                }
+                            );
+                        }
+                    } catch (err) {
+                        ctx.reply(`❌ Failed to request code: ${err.message}\nTap below to retry.`, Markup.inlineKeyboard([
+                            [Markup.button.callback('🔄 Try Again', 'request_new_code')],
+                            [Markup.button.callback('🛑 Stop Service', 'stop_process')]
+                        ]));
+      
