@@ -1,7 +1,7 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const path = require('path');
@@ -135,7 +135,6 @@ bot.use(async (ctx, next) => {
     if (ctx.from) {
         const id = ctx.from.id;
         
-        // 1. Busy/Processing Lock
         if (userState[id] === 'PROCESSING') {
             const warningMsg = '⏳ Please wait, your previous request is still processing...';
             if (ctx.callbackQuery) {
@@ -146,7 +145,6 @@ bot.use(async (ctx, next) => {
             return; 
         }
 
-        // 2. Anti Spam Tracker
         const now = Date.now();
         if (!spamTracker[id]) spamTracker[id] = [];
         spamTracker[id].push(now);
@@ -258,7 +256,7 @@ bot.command('addvip', async (ctx) => {
 });
 
 // ==========================================
-// 7. WHATSAPP ENGINE (AUTO-RETRY & CLEAN SESSION)
+// 7. WHATSAPP ENGINE (REAL-TIME SYNC & AUTO-RETRY)
 // ==========================================
 bot.action('menu_login', (ctx) => {
     userState[ctx.from.id] = 'WAITING_NUMBER';
@@ -266,7 +264,6 @@ bot.action('menu_login', (ctx) => {
     ctx.answerCbQuery();
 });
 
-// Function to clean dirty session before requesting code
 function deleteFolderRecursive(directoryPath) {
     if (fs.existsSync(directoryPath)) {
         fs.readdirSync(directoryPath).forEach((file, index) => {
@@ -294,29 +291,25 @@ bot.on('text', async (ctx) => {
         }
         
         const phoneNumber = text.replace('+', '');
-        
-        // LOCK THE STATE TO PROCESSING
         userState[userId] = 'PROCESSING'; 
         
-        // 1 Minute Failsafe to unlock state
         const failSafeUnlock = setTimeout(() => {
             if (userState[userId] === 'PROCESSING') userState[userId] = null;
-        }, 60000); 
+        }, 120000); // 2 minutes window for complete connection
         
-        // DELETE OLD DIRTY SESSION TO FIX "Couldn't link device" ERROR
         const sessionPath = `./auth_info_${userId}`;
         deleteFolderRecursive(sessionPath);
         
-        await ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(System is communicating with WhatsApp, please wait up to 10 seconds...)*`, {parse_mode: 'Markdown'});
+        await ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(Please wait, generating secure code...)*`, {parse_mode: 'Markdown'});
         
         let attempts = 0;
         let success = false;
 
-        async function requestPairingCodeWithRetry() {
+        async function startWhatsAppSession() {
             try {
-                if(attempts > 0) {
-                   await ctx.reply(`⚠️ Code Expired or Timeout!\n\n🔄 Fetching a new fresh code for **${phoneNumber}**, please wait...`, {parse_mode: 'Markdown'});
-                   deleteFolderRecursive(sessionPath); // Clean again before retry
+                if (attempts > 0) {
+                    await ctx.reply(`⚠️ Code Expired or Timeout!\n\n🔄 Requesting a fresh code for **${phoneNumber}**, please wait...`, {parse_mode: 'Markdown'});
+                    deleteFolderRecursive(sessionPath);
                 }
 
                 attempts++;
@@ -334,63 +327,87 @@ bot.on('text', async (ctx) => {
                 waSock.ev.on("creds.update", saveCreds);
                 
                 return new Promise((resolve, reject) => {
-                    let isResolved = false;
-                    
-                    // Timeout handling for code expiry (15 seconds)
-                    const timeout = setTimeout(() => {
-                        if (!isResolved) reject(new Error("Timeout/Code Expired"));
-                    }, 15000); 
+                    let codeSent = false;
 
+                    waSock.ev.on("connection.update", async (update) => {
+                        const { connection, lastDisconnect } = update;
+
+                        if (connection === 'open') {
+                            // REAL SUCCESS: Device successfully linked!
+                            if (!success) {
+                                success = true;
+                                clearTimeout(failSafeUnlock);
+                                userState[userId] = null;
+
+                                sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESSFUL</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n✅ Status: Device Linked & Connected!`);
+                                
+                                await ctx.reply(`✅ **WhatsApp Login Successful!**\nYour device has been linked successfully. You can now use the group features.`, {parse_mode: 'Markdown'});
+                                await User.updateOne({ user_id: userId }, { $addToSet: { phone_numbers: phoneNumber } });
+                                
+                                showMainMenu(ctx);
+                                resolve(true);
+                            }
+                        }
+
+                        if (connection === 'close') {
+                            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                            if (!success && !shouldReconnect && attempts < 2) {
+                                reject(new Error("Connection Closed"));
+                            }
+                        }
+                    });
+
+                    // Request Pairing Code after a short delay
                     setTimeout(async () => {
                         try {
-                            if(isResolved) return;
-                            let code = await waSock.requestPairingCode(phoneNumber);
-                            code = code?.match(/.{1,4}/g)?.join("-") || code;
-                            isResolved = true;
-                            clearTimeout(timeout);
-                            resolve(code);
+                            if (!success && !codeSent) {
+                                codeSent = true;
+                                let code = await waSock.requestPairingCode(phoneNumber);
+                                code = code?.match(/.{1,4}/g)?.join("-") || code;
+                                
+                                await ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp within 15 seconds._`, {parse_mode: 'Markdown'});
+                            }
                         } catch (e) {
-                            if(!isResolved) {
-                                isResolved = true;
-                                clearTimeout(timeout);
+                            if (!success) {
                                 reject(e);
                             }
                         }
-                    }, 3000);
+                    }, 4000);
+
+                    // Timeout if user doesn't enter code in 30 seconds
+                    setTimeout(() => {
+                        if (!success) {
+                            waSock.end(new Error("Timeout"));
+                            reject(new Error("Timeout/Code Expired"));
+                        }
+                    }, 35000);
                 });
+
             } catch (error) {
                 throw error;
             }
         }
 
-        async function executeCodeFlow() {
+        async function runFlow() {
             while (attempts < 2 && !success) {
                 try {
-                    const code = await requestPairingCodeWithRetry();
-                    
-                    // LOG ONLY ON SUCCESS WITH PROFESSIONAL FORMAT
-                    sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESS</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n✅ Action: 8-Digit Pairing Code Generated Successfully.`);
-                    
-                    ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp._`, {parse_mode: 'Markdown'});
-                    
-                    await User.updateOne({ user_id: userId }, { $addToSet: { phone_numbers: phoneNumber } });
-                    success = true;
+                    await startWhatsAppSession();
                 } catch (error) {
-                     if (attempts >= 2 || (error.message !== "Timeout/Code Expired" && !error.message.includes("Timeout"))) {
+                    if (attempts >= 2) {
                         sendLog(`❌ <b>WHATSAPP LOGIN FAILED</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n⚠️ Error: ${error.message}`);
-                        ctx.reply("❌ Failed to generate code after retries. Ensure the number is registered on WhatsApp and try again.");
+                        await ctx.reply("❌ Failed to link device. Please check your number and try again.");
+                        clearTimeout(failSafeUnlock);
+                        userState[userId] = null;
                         break;
-                     }
+                    }
                 }
             }
-            
-            clearTimeout(failSafeUnlock);
-            userState[userId] = null; // UNLOCK
         }
 
-        executeCodeFlow();
+        runFlow();
     }
 });
 
 bot.launch();
 console.log('Master Bot Started...');
+        
