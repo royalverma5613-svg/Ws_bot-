@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const express = require('express');
 const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const fs = require('fs');
+const path = require('path');
 
 // ==========================================
 // 1. SERVER, HTML & CONFIGURATION
@@ -38,7 +40,7 @@ app.get('/', (req, res) => {
 });
 app.listen(process.env.PORT || 3000);
 
-const TG_BOT_TOKEN = '8992778279:AAHH7zvVcF3Oh1_KA3QR5Q_qRG7eEA6t02c'; // Aapka Naya Token
+const TG_BOT_TOKEN = '8992778279:AAHH7zvVcF3Oh1_KA3QR5Q_qRG7eEA6t02c'; // Aapka Token
 const ADMIN_ID = 7959829014;
 const ADMIN_USERNAME = 'egofiremax';
 const LOG_CHANNEL = '@data5k';
@@ -52,7 +54,9 @@ const bot = new Telegraf(TG_BOT_TOKEN);
 // ==========================================
 const MONGODB_URI = process.env.MONGODB_URI; 
 if (MONGODB_URI) {
-    mongoose.connect(MONGODB_URI).then(() => sendLog('🟢 <b>Database Connected Successfully!</b>')).catch(err => console.log(err));
+    mongoose.connect(MONGODB_URI).then(() => {
+        console.log('MongoDB Connected');
+    }).catch(err => console.log(err));
 }
 
 const UserSchema = new mongoose.Schema({
@@ -103,36 +107,46 @@ function getMainMenu(lang) {
 // ==========================================
 async function sendLog(message) {
     try {
-        await bot.telegram.sendMessage(LOG_CHANNEL, message, { parse_mode: 'HTML' });
+        await bot.telegram.sendMessage(LOG_CHANNEL, message, { parse_mode: 'HTML', disable_web_page_preview: true });
     } catch (e) { console.log("Log send failed:", e.message); }
 }
 
-// 5-Hour Heartbeat Ping
 setInterval(() => {
     const time = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
     sendLog(`⚙️ <b>SYSTEM HEARTBEAT</b>\n\n⏱ Time: ${time} (IST)\n✅ All group maker services, MongoDB, and WhatsApp Engines are running smoothly.`);
 }, 5 * 60 * 60 * 1000);
 
+function getFormattedTime() {
+    return new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+}
+
+function formatUserForLog(fromObj) {
+    const usernameStr = fromObj.username ? `@${fromObj.username}` : 'NoUsername';
+    return `${usernameStr} (<code>${fromObj.id}</code>)`;
+}
+
 // ==========================================
-// 5. BOT CORE LOGIC & ANTI-SPAM
+// 5. BOT CORE LOGIC, ANTI-SPAM & BUSY LOCK
 // ==========================================
 const userState = {};
 const spamTracker = {};
 
-async function checkVip(userId) {
-    const user = await User.findOne({ user_id: userId });
-    if (!user || user.is_vip === 0) return false;
-    if (Date.now() / 1000 > user.vip_expiry) {
-        await User.updateOne({ user_id: userId }, { is_vip: 0, vip_expiry: 0 });
-        sendLog(`🔻 <b>VIP Expired:</b>\nUser ID: <code>${userId}</code>\nTheir VIP access has been automatically revoked.`);
-        return false;
-    }
-    return true;
-}
-
 bot.use(async (ctx, next) => {
     if (ctx.from) {
         const id = ctx.from.id;
+        
+        // 1. Busy/Processing Lock
+        if (userState[id] === 'PROCESSING') {
+            const warningMsg = '⏳ Please wait, your previous request is still processing...';
+            if (ctx.callbackQuery) {
+                await ctx.answerCbQuery(warningMsg, { show_alert: true }).catch(()=>{});
+            } else if (ctx.message) {
+                await ctx.reply(warningMsg).catch(()=>{});
+            }
+            return; 
+        }
+
+        // 2. Anti Spam Tracker
         const now = Date.now();
         if (!spamTracker[id]) spamTracker[id] = [];
         spamTracker[id].push(now);
@@ -140,7 +154,7 @@ bot.use(async (ctx, next) => {
         
         if (spamTracker[id].length > 5) {
             if (spamTracker[id].length === 6) { 
-                sendLog(`⚠️ <b>SPAM ALERT!</b>\nUser: @${ctx.from.username || 'NoUsername'}\nID: <code>${id}</code>\nAction: Flooding the bot.`);
+                sendLog(`⚠️ <b>SPAM ALERT!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n⏱ Time: ${getFormattedTime()}\n🚨 Action: Flooding the bot.`);
             }
             return; 
         }
@@ -186,7 +200,7 @@ async function showMainMenu(ctx) {
             });
             await user.save();
             
-            sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 Username: @${user.username}\n🆔 User ID: <code>${user.user_id}</code>\n🎁 Status: 1 Day Free Trial Activated.`);
+            sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n⏱ Time: ${getFormattedTime()}\n🎁 Status: 1 Day Free Trial Activated.`);
             
             return ctx.reply("🎉 Welcome! Select language:", Markup.inlineKeyboard([
                 [Markup.button.callback('🇬🇧 English', 'lang_en'), Markup.button.callback('🇮🇩 Indo', 'lang_id'), Markup.button.callback('🇨🇳 中文', 'lang_zh')]
@@ -236,7 +250,7 @@ bot.command('addvip', async (ctx) => {
     
     if (user) {
         ctx.reply(`✅ Successfully added VIP to ${targetId} for ${days} days.`);
-        sendLog(`💎 <b>VIP ACTIVATED (By Admin)</b>\n\n👤 Target ID: <code>${targetId}</code>\n⏳ Duration: ${days} Days\n📅 Valid until: ${new Date(expiryTime * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+        sendLog(`💎 <b>VIP ACTIVATED (By Admin)</b>\n\n👤 Target ID: <code>${targetId}</code>\n⏱ Activated At: ${getFormattedTime()}\n⏳ Duration: ${days} Days\n📅 Valid until: ${new Date(expiryTime * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
         bot.telegram.sendMessage(targetId, `🎉 Congratulations! Your VIP access has been activated for ${days} days!`).catch(()=>{});
     } else {
         ctx.reply("❌ User not found in database.");
@@ -244,13 +258,28 @@ bot.command('addvip', async (ctx) => {
 });
 
 // ==========================================
-// 7. WHATSAPP ENGINE (PAIRING CODE)
+// 7. WHATSAPP ENGINE (AUTO-RETRY & CLEAN SESSION)
 // ==========================================
 bot.action('menu_login', (ctx) => {
     userState[ctx.from.id] = 'WAITING_NUMBER';
     ctx.reply("📱 Send your WhatsApp number with country code (e.g., 919876XXXXX):");
     ctx.answerCbQuery();
 });
+
+// Function to clean dirty session before requesting code
+function deleteFolderRecursive(directoryPath) {
+    if (fs.existsSync(directoryPath)) {
+        fs.readdirSync(directoryPath).forEach((file, index) => {
+            const curPath = path.join(directoryPath, file);
+            if (fs.lstatSync(curPath).isDirectory()) { 
+                deleteFolderRecursive(curPath);
+            } else { 
+                fs.unlinkSync(curPath);
+            }
+        });
+        fs.rmdirSync(directoryPath);
+    }
+}
 
 bot.on('text', async (ctx) => {
     const text = ctx.message.text.trim();
@@ -265,46 +294,103 @@ bot.on('text', async (ctx) => {
         }
         
         const phoneNumber = text.replace('+', '');
-        userState[userId] = null; 
         
-        sendLog(`📲 <b>WHATSAPP LOGIN ATTEMPT</b>\n\n👤 User ID: <code>${userId}</code>\n📞 Target Number: <code>${phoneNumber}</code>`);
+        // LOCK THE STATE TO PROCESSING
+        userState[userId] = 'PROCESSING'; 
         
-        ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(System is communicating with WhatsApp, please wait up to 10 seconds...)*`, {parse_mode: 'Markdown'});
+        // 1 Minute Failsafe to unlock state
+        const failSafeUnlock = setTimeout(() => {
+            if (userState[userId] === 'PROCESSING') userState[userId] = null;
+        }, 60000); 
         
-        try {
-            const { state, saveCreds } = await useMultiFileAuthState(`./auth_info_${userId}`);
-            const { version } = await fetchLatestBaileysVersion();
-            
-            const waSock = makeWASocket({
-                version,
-                printQRInTerminal: false,
-                auth: state,
-                logger: pino({ level: "silent" }),
-                browser: ["Mac OS", "Chrome", "10.0.0"]
-            });
-            
-            waSock.ev.on("creds.update", saveCreds);
-            
-            setTimeout(async () => {
+        // DELETE OLD DIRTY SESSION TO FIX "Couldn't link device" ERROR
+        const sessionPath = `./auth_info_${userId}`;
+        deleteFolderRecursive(sessionPath);
+        
+        await ctx.reply(`⏳ Requesting WhatsApp pairing code for **${phoneNumber}**...\n\n*(System is communicating with WhatsApp, please wait up to 10 seconds...)*`, {parse_mode: 'Markdown'});
+        
+        let attempts = 0;
+        let success = false;
+
+        async function requestPairingCodeWithRetry() {
+            try {
+                if(attempts > 0) {
+                   await ctx.reply(`⚠️ Code Expired or Timeout!\n\n🔄 Fetching a new fresh code for **${phoneNumber}**, please wait...`, {parse_mode: 'Markdown'});
+                   deleteFolderRecursive(sessionPath); // Clean again before retry
+                }
+
+                attempts++;
+                const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+                const { version } = await fetchLatestBaileysVersion();
+                
+                const waSock = makeWASocket({
+                    version,
+                    printQRInTerminal: false,
+                    auth: state,
+                    logger: pino({ level: "silent" }),
+                    browser: ["Mac OS", "Chrome", "10.0.0"]
+                });
+                
+                waSock.ev.on("creds.update", saveCreds);
+                
+                return new Promise((resolve, reject) => {
+                    let isResolved = false;
+                    
+                    // Timeout handling for code expiry (15 seconds)
+                    const timeout = setTimeout(() => {
+                        if (!isResolved) reject(new Error("Timeout/Code Expired"));
+                    }, 15000); 
+
+                    setTimeout(async () => {
+                        try {
+                            if(isResolved) return;
+                            let code = await waSock.requestPairingCode(phoneNumber);
+                            code = code?.match(/.{1,4}/g)?.join("-") || code;
+                            isResolved = true;
+                            clearTimeout(timeout);
+                            resolve(code);
+                        } catch (e) {
+                            if(!isResolved) {
+                                isResolved = true;
+                                clearTimeout(timeout);
+                                reject(e);
+                            }
+                        }
+                    }, 3000);
+                });
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        async function executeCodeFlow() {
+            while (attempts < 2 && !success) {
                 try {
-                    let code = await waSock.requestPairingCode(phoneNumber);
-                    code = code?.match(/.{1,4}/g)?.join("-") || code;
+                    const code = await requestPairingCodeWithRetry();
+                    
+                    // LOG ONLY ON SUCCESS WITH PROFESSIONAL FORMAT
+                    sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESS</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n✅ Action: 8-Digit Pairing Code Generated Successfully.`);
+                    
                     ctx.reply(`✅ **Your Pairing Code:**\n\n\`${code}\`\n\n_Enter this in your linked devices menu on WhatsApp._`, {parse_mode: 'Markdown'});
-                    sendLog(`🔑 <b>CODE GENERATED</b>\nUser: <code>${userId}</code>\nNumber: <code>${phoneNumber}</code>`);
                     
                     await User.updateOne({ user_id: userId }, { $addToSet: { phone_numbers: phoneNumber } });
-                } catch (e) {
-                    ctx.reply("❌ Failed to generate code. Ensure the number is registered on WhatsApp and try again.");
-                    sendLog(`❌ <b>CODE FAILED</b>\nUser: <code>${userId}</code>\nError: ${e.message}`);
+                    success = true;
+                } catch (error) {
+                     if (attempts >= 2 || (error.message !== "Timeout/Code Expired" && !error.message.includes("Timeout"))) {
+                        sendLog(`❌ <b>WHATSAPP LOGIN FAILED</b>\n\n👤 User: ${formatUserForLog(ctx.from)}\n📞 Number: <code>${phoneNumber}</code>\n⏱ Time: ${getFormattedTime()}\n⚠️ Error: ${error.message}`);
+                        ctx.reply("❌ Failed to generate code after retries. Ensure the number is registered on WhatsApp and try again.");
+                        break;
+                     }
                 }
-            }, 3000);
+            }
             
-        } catch (error) {
-            ctx.reply("❌ Critical Server Error in WhatsApp Engine.");
+            clearTimeout(failSafeUnlock);
+            userState[userId] = null; // UNLOCK
         }
+
+        executeCodeFlow();
     }
 });
 
 bot.launch();
 console.log('Master Bot Started...');
-    
