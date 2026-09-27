@@ -1,14 +1,20 @@
 const { Telegraf, Markup } = require('telegraf');
 const mongoose = require('mongoose');
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } = require('@whiskeysockets/baileys');
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    fetchLatestBaileysVersion, 
+    DisconnectReason,
+    Browsers,
+    makeCacheableSignalKeyStore
+} = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
-const path = require('path');
 
 // 1. WEB SERVER FOR RENDER
 const app = express();
-app.get('/', (req, res) => res.send('<h1>Ws_gc_2xbot is Running 24/7</h1>'));
+app.get('/', (req, res) => res.send('<h1>Ws_gc_2xbot Master Engine Live</h1>'));
 app.listen(process.env.PORT || 3000);
 
 // CONFIGURATION
@@ -72,8 +78,12 @@ const getReplyKeyboard = () => Markup.keyboard([
 ]).resize();
 
 function cleanFolder(dir) {
-    if (fs.existsSync(dir)) {
-        fs.rmSync(dir, { recursive: true, force: true });
+    try {
+        if (fs.existsSync(dir)) {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    } catch (e) {
+        console.log('Cleanup error:', e.message);
     }
 }
 
@@ -86,7 +96,7 @@ bot.use(async (ctx, next) => {
         if (ctx.callbackQuery && ['request_new_code', 'stop_process'].includes(ctx.callbackQuery.data)) {
             return next();
         }
-        const warning = '⏳ Service is currently running! Enter code in WhatsApp or use buttons below:';
+        const warning = '⏳ WhatsApp Linking is active! Enter code in WhatsApp or use buttons below:';
         const kb = Markup.inlineKeyboard([
             [Markup.button.callback('🔄 Get New Code', 'request_new_code')],
             [Markup.button.callback('🛑 Stop Service', 'stop_process')]
@@ -104,7 +114,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// 5. BOT COMMANDS & ACTIONS
+// 5. BOT ACTIONS & NAVIGATION
 async function checkSub(ctx) {
     try {
         const m = await ctx.telegram.getChatMember(FORCE_SUB_CHAT, ctx.from.id);
@@ -123,7 +133,7 @@ async function showHome(ctx) {
         });
         sendLog(`🎉 <b>NEW USER JOINED!</b>\n\n👤 User: @${ctx.from.username || 'None'} (<code>${ctx.from.id}</code>)\n⏱ ${getFormattedTime()}`);
     }
-    await ctx.reply('⚡ Bot Dashboard Ready:', getReplyKeyboard());
+    await ctx.reply('⚡ Dashboard Menu:', getReplyKeyboard());
     await ctx.reply('🏠 <b>Main Menu</b>\nSelect an option below:', { parse_mode: 'HTML', ...getInlineMenu() });
 }
 
@@ -152,36 +162,35 @@ bot.action('check_sub', async (ctx) => {
 bot.action('stop_process', async (ctx) => {
     const id = ctx.from.id;
     if (activeSockets[id]) {
-        try { activeSockets[id].end(new Error('User Stopped')); } catch {}
+        try { activeSockets[id].end(undefined); } catch {}
         delete activeSockets[id];
     }
     cleanFolder(`./auth_info_${id}`);
     userState[id] = null;
     delete userPhoneNumbers[id];
-    await ctx.answerCbQuery('Stopped').catch(()=>{});
+    await ctx.answerCbQuery('Service Stopped').catch(()=>{});
     await ctx.reply('🛑 <b>Service Stopped Successfully.</b>', { parse_mode: 'HTML' });
     showHome(ctx);
 });
 
 bot.action('buy_vip', (ctx) => {
     ctx.answerCbQuery();
-    ctx.reply('💎 <b>VIP Access:</b>\n\nContact Admin @egofiremax to activate VIP.', { parse_mode: 'HTML' });
+    ctx.reply('💎 <b>VIP Plans:</b>\n\nContact Admin @egofiremax to activate VIP.', { parse_mode: 'HTML' });
 });
 
 bot.action('menu_help', (ctx) => {
     ctx.answerCbQuery();
-    ctx.reply('📖 <b>How to use:</b>\n\n1. Click <b>Login Account</b>\n2. Send phone number with country code (e.g. 919876XXXXX)\n3. Tap code to copy and paste in WhatsApp Linked Devices\n4. If code expires, click <b>Get New Code</b>.', { parse_mode: 'HTML' });
+    ctx.reply('📖 <b>How to Link:</b>\n\n1. Tap <b>Login Account</b>\n2. Send phone number with country code\n3. Tap pairing code to copy\n4. Open WhatsApp > Linked Devices > Link with phone number\n5. Paste the code.', { parse_mode: 'HTML' });
 });
 
-// STATUS & FUNCTION VALIDATION
 async function validateUserWA(ctx) {
     const u = await User.findOne({ user_id: ctx.from.id });
     if (!u || !u.is_connected) {
         if (ctx.callbackQuery) await ctx.answerCbQuery('⚠️ Link WhatsApp first!', { show_alert: true });
-        return ctx.reply("⚠️ <b>Action Required:</b> You haven't linked your WhatsApp account yet. Please click <b>Login Account</b> first.", { parse_mode: 'HTML' });
+        return ctx.reply("⚠️ <b>Action Required:</b> Please click <b>Login Account</b> to link your WhatsApp first.", { parse_mode: 'HTML' });
     }
     if (ctx.callbackQuery) ctx.answerCbQuery();
-    ctx.reply('📊 Your WhatsApp account is linked and active!');
+    ctx.reply('📊 Your WhatsApp account is linked and ready!');
 }
 
 bot.action(['menu_status', 'menu_create', 'menu_edit', 'menu_remove', 'menu_settings'], validateUserWA);
@@ -197,9 +206,8 @@ bot.hears('📱 Login Account', promptLogin);
 bot.action('menu_login', (ctx) => { ctx.answerCbQuery(); promptLogin(ctx); });
 
 bot.hears('💎 Buy VIP', (ctx) => ctx.reply('💎 Contact @egofiremax for VIP access.'));
-bot.hears('❓ Help', (ctx) => ctx.reply('📖 Send your WhatsApp number in Login Account and link using the code.', { parse_mode: 'HTML' }));
+bot.hears('❓ Help', (ctx) => ctx.reply('📖 Send your WhatsApp number in Login Account to pair.', { parse_mode: 'HTML' }));
 
-// ADMIN VIP COMMAND
 bot.command('addvip', async (ctx) => {
     if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) return;
     const [, targetId, days] = ctx.message.text.split(' ');
@@ -212,19 +220,19 @@ bot.command('addvip', async (ctx) => {
     } else ctx.reply('❌ User not found.');
 });
 
-// 6. WHATSAPP CONNECTION & PAIRING ENGINE (515 RECONNECT READY)
+// 6. WHATSAPP ENGINE: BULLETPROOF PAIRING
 async function startWhatsAppPairing(userId, phone, ctx) {
     userState[userId] = 'PROCESSING';
     userPhoneNumbers[userId] = phone;
     const sessionDir = `./auth_info_${userId}`;
 
     if (activeSockets[userId]) {
-        try { activeSockets[userId].end(new Error('Reset')); } catch {}
+        try { activeSockets[userId].end(undefined); } catch {}
         delete activeSockets[userId];
     }
     cleanFolder(sessionDir);
 
-    await ctx.reply(`⏳ Connecting WhatsApp for <b>+${phone}</b>...\n<i>(Generating secure code...)</i>`, {
+    await ctx.reply(`⏳ Requesting secure pairing code for <b>+${phone}</b>...\n<i>(Connecting to WhatsApp...)</i>`, {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([[Markup.button.callback('🛑 Cancel', 'stop_process')]])
     });
@@ -233,21 +241,26 @@ async function startWhatsAppPairing(userId, phone, ctx) {
 
     async function initSocket() {
         if (userState[userId] !== 'PROCESSING') return;
+
         try {
             const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
             const { version } = await fetchLatestBaileysVersion();
+            const logger = pino({ level: 'silent' });
 
             const sock = makeWASocket({
                 version,
                 printQRInTerminal: false,
-                auth: state,
-                logger: pino({ level: 'silent' }),
-                browser: ['Ubuntu', 'Chrome', '22.04.4'],
+                auth: {
+                    creds: state.creds,
+                    keys: makeCacheableSignalKeyStore(state.keys, logger)
+                },
+                logger,
+                browser: Browsers.macOS('Desktop'),
                 syncFullHistory: false,
                 markOnlineOnConnect: true,
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
-                keepAliveIntervalMs: 10000
+                keepAliveIntervalMs: 15000
             });
 
             activeSockets[userId] = sock;
@@ -257,14 +270,17 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                 const { connection, lastDisconnect } = update;
 
                 if (connection === 'close') {
-                    const code = lastDisconnect?.error?.output?.statusCode;
-                    const canReconnect = code !== DisconnectReason.loggedOut;
-                    if (canReconnect && userState[userId] === 'PROCESSING') {
-                        initSocket(); // CRITICAL: 515 restart handshake
-                    } else if (code === DisconnectReason.loggedOut) {
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    console.log(`[WA Socket Closed] User: ${userId}, Status: ${statusCode}`);
+
+                    // 515 is restartRequired (WhatsApp accepts pairing code and triggers restart)
+                    if (statusCode === 515 && userState[userId] === 'PROCESSING') {
+                        console.log('Handshake in progress (515)... Reconnecting socket immediately');
+                        initSocket();
+                    } else if (statusCode === DisconnectReason.loggedOut) {
                         cleanFolder(sessionDir);
                         userState[userId] = null;
-                        ctx.reply('❌ WhatsApp logged out. Please login again.');
+                        ctx.reply('❌ Device logged out. Please try logging in again.');
                     }
                 }
 
@@ -274,12 +290,13 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                     delete userPhoneNumbers[userId];
 
                     sendLog(`🔑 <b>WHATSAPP LOGIN SUCCESS</b>\n\n👤 User: @${ctx.from.username || 'None'} (<code>${userId}</code>)\n📞 <code>${phone}</code>\n⏱ ${getFormattedTime()}`);
-                    await ctx.reply('✅ <b>WhatsApp Linked Successfully!</b>\nYour account is now ready.', { parse_mode: 'HTML' });
+                    await ctx.reply('✅ <b>WhatsApp Account Linked Successfully!</b>\nYou can now automate groups.', { parse_mode: 'HTML' });
                     await User.updateOne({ user_id: userId }, { $set: { is_connected: true },$addToSet: { phone_numbers: phone } });
                     showHome(ctx);
                 }
             });
 
+            // Request pairing code safely after socket establishes connection
             if (!sock.authState.creds.registered && !codeSent) {
                 setTimeout(async () => {
                     try {
@@ -289,7 +306,7 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             c = c?.match(/.{1,4}/g)?.join('-') || c;
 
                             await ctx.reply(
-                                `✅ <b>Your Pairing Code:</b>\n\n<code>${c}</code>\n\n👉 <i>Tap on the code to copy it instantly!</i>\nEnter this code in WhatsApp Linked Devices.\n\n⚠️ If code expires, tap <b>🔄 Get New Code</b> below:`,
+                                `✅ <b>Your WhatsApp Pairing Code:</b>\n\n<code>${c}</code>\n\n👉 <i>Tap on the code to copy it instantly!</i>\n\n1. Open <b>WhatsApp</b> on your phone\n2. Tap <b>Settings > Linked Devices</b>\n3. Tap <b>Link a Device > Link with phone number instead</b>\n4. Enter the code above.\n\n⚠️ If code expires, tap <b>🔄 Get New Code</b> below:`,
                                 {
                                     parse_mode: 'HTML',
                                     ...Markup.inlineKeyboard([
@@ -300,15 +317,19 @@ async function startWhatsAppPairing(userId, phone, ctx) {
                             );
                         }
                     } catch (e) {
-                        ctx.reply(`❌ Code request error: ${e.message}`, Markup.inlineKeyboard([
-                            [Markup.button.callback('🔄 Try Again', 'request_new_code')],
-                            [Markup.button.callback('🛑 Stop Service', 'stop_process')]
-                        ]));
+                        ctx.reply(`❌ Could not generate pairing code: ${e.message}\n\n⚠️ <i>WhatsApp might have temporarily rate-limited pairing requests for this number. Wait 5 minutes and tap below to retry.</i>`, {
+                            parse_mode: 'HTML',
+                            ...Markup.inlineKeyboard([
+                                [Markup.button.callback('🔄 Try Again', 'request_new_code')],
+                                [Markup.button.callback('🛑 Stop Service', 'stop_process')]
+                            ])
+                        });
                     }
-                }, 3000);
+                }, 4000);
             }
+
         } catch (e) {
-            console.log('Socket Error:', e.message);
+            console.log('Socket Init Error:', e.message);
         }
     }
 
@@ -323,8 +344,8 @@ bot.action('request_new_code', async (ctx) => {
         userState[id] = null;
         return promptLogin(ctx);
     }
-    await ctx.answerCbQuery('🔄 Requesting fresh code...');
-    await ctx.reply('🔄 Cleaning old session & requesting fresh code from WhatsApp...');
+    await ctx.answerCbQuery('🔄 Requesting new code...').catch(()=>{});
+    await ctx.reply('🔄 Clearing session & requesting fresh code from WhatsApp...');
     startWhatsAppPairing(id, phone, ctx);
 });
 
@@ -337,11 +358,11 @@ bot.on('text', async (ctx) => {
     if (userState[id] === 'WAITING_NUMBER') {
         const phone = text.replace(/[^0-9]/g, '');
         if (phone.length < 10 || phone.length > 15) {
-            return ctx.reply('❌ Invalid number format! Send with country code (e.g., 919876XXXXX).');
+            return ctx.reply('❌ Invalid format! Please send your number with country code (e.g., 919876XXXXX).');
         }
         startWhatsAppPairing(id, phone, ctx);
     }
 });
 
 bot.launch().then(() => console.log('Bot Launched Successfully'));
-        
+            
