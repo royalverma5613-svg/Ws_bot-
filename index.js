@@ -9,7 +9,7 @@ app.get('/', (req, res) => res.send('Ws_gc_2xbot is Running!'));
 app.listen(process.env.PORT || 3000);
 
 // Aapki khaas details
-const TG_BOT_TOKEN = '8992778279:AAGS6hMiFdGd5KF3O1VSAM7wOvfoMb464HM';
+const TG_BOT_TOKEN = '8992778279:AAHH7zvVcF3Oh1_KA3QR5Q_qRG7eEA6t02c';
 const ADMIN_ID = 7959829014;
 const UPI_ID = 'kumar.14534@superyes';
 const FORCE_SUB_CHAT_ID = '@ai2kmm';
