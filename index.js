@@ -21,6 +21,9 @@ const bot = new Telegraf(TG_BOT_TOKEN);
 
 const BOT_FOOTER = "\n\n👑 <b>Bot Owner:</b> @egofiremax\n🤖 <b>Bot Username:</b> @Ws_gc_2xbot";
 
+// 🔥 GLOBAL FREE MODE SWITCH (Default = true) 🔥
+let global_free_mode = true;
+
 if (process.env.MONGODB_URI) {
     mongoose.connect(process.env.MONGODB_URI).catch(e => console.log('DB:', e.message));
 }
@@ -42,20 +45,35 @@ setInterval(() => {
     sendLog(`⚙️ <b>SYSTEM HEARTBEAT</b>\n\n⏱ Time: ${getFormattedTime()} (IST)\n✅ Engine is Live.`);
 }, 5 * 60 * 60 * 1000);
 
-const getInlineMenu = () => Markup.inlineKeyboard([
-    [Markup.button.callback('📊 Status', 'menu_status'), Markup.button.callback('➕ Create Group', 'menu_create')],
-    [Markup.button.callback('📋 Copy GC Links', 'menu_copy_links'), Markup.button.callback('🗑️ Remove Members', 'menu_remove')],
-    [Markup.button.callback('✏️ Edit Group', 'menu_edit'), Markup.button.callback('⚙️ Settings', 'menu_settings')],
-    [Markup.button.callback('📱 Login Account', 'menu_login'), Markup.button.callback('💎 Buy VIP', 'buy_vip')],
-    [Markup.button.callback('❓ Help', 'menu_help'), Markup.button.callback('🌐 Language', 'change_lang')]
-]);
+// 🔥 DYNAMIC MENUS (Shows/Hides VIP based on mode) 🔥
+const getInlineMenu = () => {
+    let kb = [
+        [Markup.button.callback('📊 Status', 'menu_status'), Markup.button.callback('➕ Create Group', 'menu_create')],
+        [Markup.button.callback('📋 Copy GC Links', 'menu_copy_links'), Markup.button.callback('🗑️ Remove Members', 'menu_remove')],
+        [Markup.button.callback('✏️ Edit Group', 'menu_edit'), Markup.button.callback('⚙️ Settings', 'menu_settings')]
+    ];
+    if (global_free_mode) {
+        kb.push([Markup.button.callback('📱 Login Account', 'menu_login')]);
+    } else {
+        kb.push([Markup.button.callback('📱 Login Account', 'menu_login'), Markup.button.callback('💎 Buy VIP', 'buy_vip')]);
+    }
+    kb.push([Markup.button.callback('❓ Help', 'menu_help'), Markup.button.callback('🌐 Language', 'change_lang')]);
+    return Markup.inlineKeyboard(kb);
+};
 
-const getReplyKeyboard = () => Markup.keyboard([
-    ['📊 Status', '➕ Create Group'],
-    ['📋 Copy GC Links', '🗑️ Remove Members'],
-    ['✏️ Edit Group', '⚙️ Settings'],
-    ['📱 Login Account', '💎 Buy VIP', '❓ Help']
-]).resize();
+const getReplyKeyboard = () => {
+    let kb = [
+        ['📊 Status', '➕ Create Group'],
+        ['📋 Copy GC Links', '🗑️ Remove Members'],
+        ['✏️ Edit Group', '⚙️ Settings']
+    ];
+    if (global_free_mode) {
+        kb.push(['📱 Login Account', '❓ Help']);
+    } else {
+        kb.push(['📱 Login Account', '💎 Buy VIP', '❓ Help']);
+    }
+    return Markup.keyboard(kb).resize();
+};
 
 function cleanFolder(dir) {
     try { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
@@ -139,12 +157,19 @@ bot.action(/set_lang_(.+)/, async (ctx) => {
     ctx.editMessageText('✅ <b>Language set successfully!</b>\n\n🏠 <b>Main Menu</b>\nSelect an option:', { parse_mode: 'HTML', ...getInlineMenu() });
 });
 
-bot.action('buy_vip', (ctx) => { ctx.answerCbQuery(); ctx.reply('💎 <b>VIP Plans:</b>\n\nContact Admin @egofiremax to activate VIP.' + BOT_FOOTER, { parse_mode: 'HTML' }); });
+bot.action('buy_vip', (ctx) => { 
+    ctx.answerCbQuery(); 
+    if (global_free_mode) return;
+    ctx.reply('💎 <b>VIP Plans:</b>\n\nContact Admin @egofiremax to activate VIP.' + BOT_FOOTER, { parse_mode: 'HTML' }); 
+});
 bot.action('menu_help', (ctx) => {
     ctx.answerCbQuery();
     ctx.reply('📖 <b>How to Use:</b>\n\n1. <b>Login:</b> Pair WhatsApp via 8-digit code.\n2. <b>Status:</b> Manage accounts.\n3. <b>Create Group:</b> Batch group creator.\n4. <b>Copy GC Links:</b> Extract invite links of existing groups.\n5. <b>Remove Members:</b> Kick non-admins from selected groups.' + BOT_FOOTER, { parse_mode: 'HTML' });
 });
-bot.hears('💎 Buy VIP', (ctx) => ctx.reply('💎 Contact @egofiremax for VIP access.' + BOT_FOOTER, { parse_mode: 'HTML' }));
+bot.hears('💎 Buy VIP', (ctx) => {
+    if (global_free_mode) return;
+    ctx.reply('💎 Contact @egofiremax for VIP access.' + BOT_FOOTER, { parse_mode: 'HTML' });
+});
 bot.hears('❓ Help', (ctx) => ctx.reply('📖 Use <b>Login Account</b> to pair, <b>Create Group</b> to create, and <b>Copy GC Links</b> to extract links.' + BOT_FOOTER, { parse_mode: 'HTML' }));
 bot.hears('⚙️ Settings', (ctx) => ctx.reply('⚙️ Use <b>Language</b> or <b>Status</b> menu to configure settings.' + BOT_FOOTER, { parse_mode: 'HTML' }));
 
@@ -168,9 +193,15 @@ async function showUserStatus(ctx) {
         inlineButtons.push(row);
     });
 
-    const isVip = u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
-    const expiryDate = u.vip_expiry ? new Date(u.vip_expiry * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Expired';
-    ctx.reply(`${accountsText}\n💎 <b>VIP:</b> ${isVip ? '✅ Active' : '❌ Inactive'}\n⏳ <b>Validity:</b> ${expiryDate}\n⚡ <b>Engine:</b> 🟢 Ready` + BOT_FOOTER, { parse_mode: 'HTML', ...Markup.inlineKeyboard(inlineButtons) });
+    // 🔥 HIDE VIP DETAILS IF FREE MODE IS ON 🔥
+    let vipText = "";
+    if (!global_free_mode) {
+        const isVip = u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+        const expiryDate = u.vip_expiry ? new Date(u.vip_expiry * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'Expired';
+        vipText = `\n💎 <b>VIP:</b> ${isVip ? '✅ Active' : '❌ Inactive'}\n⏳ <b>Validity:</b> ${expiryDate}`;
+    }
+
+    ctx.reply(`${accountsText}${vipText}\n⚡ <b>Engine:</b> 🟢 Ready` + BOT_FOOTER, { parse_mode: 'HTML', ...Markup.inlineKeyboard(inlineButtons) });
 }
 bot.action('menu_status', showUserStatus);
 bot.hears('📊 Status', showUserStatus);
@@ -316,6 +347,15 @@ async function initiateCreateGroup(ctx) {
     if (!u || !u.is_connected || !u.phone_numbers || u.phone_numbers.length === 0) {
         return ctx.reply("⚠️ <b>Action Required:</b> Please link your WhatsApp account first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
     }
+
+    // 🔥 VIP BYPASS CHECK 🔥
+    if (!global_free_mode) {
+        const isVip = u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+        if (!isVip) {
+            return ctx.reply("⚠️ <b>VIP Access Required!</b>\n\nYou need an active VIP subscription to use this premium feature.\n\nContact @egofiremax to upgrade." + BOT_FOOTER, { parse_mode: 'HTML' });
+        }
+    }
+
     userState[ctx.from.id] = 'WIZARD_COUNT';
     groupWizard[ctx.from.id] = { 
         perms: { editSettings: false, sendMessages: true, addMembers: false, approveMembers: false },
@@ -464,6 +504,16 @@ bot.on('photo', async (ctx) => {
 // 8. COPY GC LINKS (EXTRACT INLINE OPTIONS)
 async function initiateCopyGCLinks(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
+
+    // 🔥 VIP BYPASS CHECK 🔥
+    if (!global_free_mode) {
+        const u = await User.findOne({ user_id: ctx.from.id });
+        const isVip = u && u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+        if (!isVip) {
+            return ctx.reply("⚠️ <b>VIP Access Required!</b>\n\nYou need an active VIP subscription to use this premium feature.\n\nContact @egofiremax to upgrade." + BOT_FOOTER, { parse_mode: 'HTML' });
+        }
+    }
+
     const sock = await getActiveWASocket(ctx.from.id);
     if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
 
@@ -543,6 +593,16 @@ bot.action('cplink_submit', async (ctx) => {
 // 9. REMOVE MEMBERS (MULTI-SELECT & KICK NON-ADMINS)
 async function initiateRemoveMembers(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
+
+    // 🔥 VIP BYPASS CHECK 🔥
+    if (!global_free_mode) {
+        const u = await User.findOne({ user_id: ctx.from.id });
+        const isVip = u && u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+        if (!isVip) {
+            return ctx.reply("⚠️ <b>VIP Access Required!</b>\n\nYou need an active VIP subscription to use this premium feature.\n\nContact @egofiremax to upgrade." + BOT_FOOTER, { parse_mode: 'HTML' });
+        }
+    }
+
     const sock = await getActiveWASocket(ctx.from.id);
     if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
 
@@ -626,6 +686,16 @@ bot.action('rem_submit', async (ctx) => {
 // 10. EDIT GROUP PERMISSIONS
 async function initiateEditGroup(ctx) {
     if (ctx.callbackQuery) await ctx.answerCbQuery();
+
+    // 🔥 VIP BYPASS CHECK 🔥
+    if (!global_free_mode) {
+        const u = await User.findOne({ user_id: ctx.from.id });
+        const isVip = u && u.is_vip && u.vip_expiry > Math.floor(Date.now() / 1000);
+        if (!isVip) {
+            return ctx.reply("⚠️ <b>VIP Access Required!</b>\n\nYou need an active VIP subscription to use this premium feature.\n\nContact @egofiremax to upgrade." + BOT_FOOTER, { parse_mode: 'HTML' });
+        }
+    }
+
     const sock = await getActiveWASocket(ctx.from.id);
     if (!sock) return ctx.reply("⚠️ Link WhatsApp first via <b>Login Account</b>." + BOT_FOOTER, { parse_mode: 'HTML' });
     await ctx.reply("🔍 Loading your groups to configure permissions...");
@@ -750,6 +820,21 @@ bot.command(['broadcast', 'bc'], async (ctx) => {
     await bot.telegram.editMessageText(ctx.chat.id, progress.message_id, undefined, 
         `✅ <b>Broadcast Completed!</b>\n\n👥 Total: ${allUsers.length}\n📨 Sent: ${sent}\n❌ Failed: ${fail}` + BOT_FOOTER, { parse_mode: 'HTML' }
     );
+});
+
+// 🔥 NEW FREE/PAID ADMIN COMMANDS 🔥
+bot.command('freeforall', async (ctx) => {
+    if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) return;
+    global_free_mode = true;
+    ctx.reply('✅ <b>Global Free Mode Activated!</b>\n\nAll premium features are now unlocked for everyone. VIP menus are hidden.', { parse_mode: 'HTML' });
+    sendLog(`🔓 <b>FREE MODE ENABLED</b>\n\nAdmin: @${ctx.from.username}\n⏱ ${getFormattedTime()}`);
+});
+
+bot.command('paidforall', async (ctx) => {
+    if (ctx.from.username !== ADMIN_USERNAME && ctx.from.id !== ADMIN_ID) return;
+    global_free_mode = false;
+    ctx.reply('🔒 <b>Global Paid Mode Activated!</b>\n\nVIP system is now active. Normal users will be asked to buy VIP for premium features.', { parse_mode: 'HTML' });
+    sendLog(`🔒 <b>PAID MODE ENABLED</b>\n\nAdmin: @${ctx.from.username}\n⏱ ${getFormattedTime()}`);
 });
 
 bot.launch().then(() => console.log('Bot Launched Successfully'));
